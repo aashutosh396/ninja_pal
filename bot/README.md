@@ -28,8 +28,24 @@ LLM brain). It shows up in the player list, has a body, and plays alongside you:
 - **Node.js 18+** (uses built-in `fetch`).
 - Your world **Open to LAN** (singleplayer) or a Minecraft server. Works with TLauncher via
   offline mode.
-- An OpenAI-compatible API key for the chat brain (optional — without it the pal still does
-  follow/stop/come/defend, just no free-form chat).
+- A **brain** (see below). The default is your **local Claude Max** login — no API key, no
+  per-token cost.
+
+## Brain backend
+
+Set `"backend"` in `config.json`:
+
+- **`"claude"` (default)** — shells out to your locally logged-in `claude` CLI (Claude Max),
+  exactly like discord-autoreply. **No API key, no per-token cost.** Make sure `claude` works in
+  your terminal (run `claude -p "hi"` once). Pick the model with `"claudeModel"` (e.g.
+  `claude-sonnet-4-6` for fast/cheap, `claude-opus-4-8` for the smartest pal).
+- **`"openai"`** — any OpenAI-compatible HTTP endpoint. Set `"apiKey"`, `"apiUrl"`, `"model"`.
+  Works with OpenAI, OpenRouter (use Claude/any model through it), or a local server.
+
+If `"backend"` is omitted: a present `apiKey` → openai, otherwise → claude.
+
+Without any working brain the pal still does the direct commands (follow/stop/come/defend/get
+tools/shelter/home), just no free-form chat or planning.
 
 ## Setup
 
@@ -46,9 +62,12 @@ Edit `config.json`:
 | `owner` | **your** in-game username — the bot only obeys you |
 | `palName` | the bot's username (shows in the player list) |
 | `host` / `port` | `localhost` + the port Minecraft prints when you **Open to LAN** |
-| `apiKey` | your OpenAI-compatible key (leave blank to skip chat) |
-| `apiUrl` / `model` | defaults to OpenAI; point at OpenRouter / a local server if you like |
+| `backend` | `claude` (local Claude Max, default) or `openai` |
+| `claudeModel` | which Claude model when backend=claude (`claude-sonnet-4-6` / `claude-opus-4-8`) |
+| `apiKey` / `apiUrl` / `model` | only for backend=openai |
 | `systemPrompt` | the pal's personality |
+
+With the default `claude` backend you only need to set **`owner`** and **`port`** — no API key.
 
 ## Run
 

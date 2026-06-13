@@ -10,7 +10,7 @@ const { pathfinder } = require('mineflayer-pathfinder');
 const { plugin: pvp } = require('mineflayer-pvp');
 const collectBlock = require('mineflayer-collectblock').plugin;
 const { makeSkills } = require('./skills');
-const { think } = require('./brain');
+const { think, resolveBackend } = require('./brain');
 const memory = require('./memory');
 
 const cfgPath = path.join(__dirname, '..', 'config.json');
@@ -41,7 +41,7 @@ let skills = null;
 bot.once('spawn', () => {
   skills = makeSkills(bot, config, state);
   skills.setMovements();
-  console.log(`[Ninja Pal] ${bot.username} spawned. Owner=${config.owner}. follow+auto-defend on.`);
+  console.log(`[Ninja Pal] ${bot.username} spawned. Owner=${config.owner}. brain=${resolveBackend(config)}. follow+auto-defend on.`);
   bot.chat(`hey ${config.owner}, im here! say "follow me", "stop", "come", or just talk to me`);
 
   setInterval(() => {
@@ -86,8 +86,9 @@ async function handle(message) {
   if (/^(go home|gohome|head home)$/.test(m)) return ack(goHome());
 
   // Everything else -> the LLM brain (chat + optional action).
-  if (!config.apiKey) {
-    bot.chat("(no api key set — i can still do: follow, stop, come, defend)");
+  // Only the OpenAI backend needs a key; the Claude backend uses the local CLI login.
+  if (resolveBackend(config) === 'openai' && !config.apiKey) {
+    bot.chat("(no api key set — i can still do: follow, stop, come, defend, get tools, shelter)");
     return;
   }
   try {

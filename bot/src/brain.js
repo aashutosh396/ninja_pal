@@ -1,8 +1,36 @@
 'use strict';
-// The pal's "brain": sends the owner's chat + a rich snapshot of the world to an
-// OpenAI-compatible LLM and gets back a short in-character reply plus an ORDERED PLAN of
-// actions to carry out. Backend-agnostic — point config.apiUrl at OpenAI, OpenRouter, or a
-// local server, and config.model at whatever model you like (a stronger model = a smarter pal).
+// The pal's "brain": sends the owner's chat + a rich snapshot of the world to an LLM and gets
+// back a short in-character reply plus an ORDERED PLAN of actions to carry out.
+//
+// Two backends:
+//   - "claude":  shells out to the locally logged-in `claude` CLI (Claude Max, no API key,
+//                no per-token cost) — same approach as discord-autoreply's brain.py.
+//   - "openai":  any OpenAI-compatible HTTP endpoint (OpenAI, OpenRouter, local server).
+// Picked by config.backend, else auto: a key present => openai, otherwise => claude.
+
+const { execFile } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+function resolveBackend(config) {
+  if (config.backend) return String(config.backend).toLowerCase();
+  if (config.apiKey && config.apiKey.trim()) return 'openai';
+  return 'claude'; // default to the local Claude Max CLI
+}
+
+function findClaude() {
+  const env = process.env.CLAUDE_BIN;
+  if (env && fs.existsSync(env)) return env;
+  for (const c of [
+    path.join(os.homedir(), '.local/bin/claude'),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+  ]) {
+    if (fs.existsSync(c)) return c;
+  }
+  return 'claude'; // hope it's on PATH
+}
 
 const ACTIONS_DOC = `Actions you can plan (list them in the order they should run; [] = just talk):
 - {"name":"follow"}                                  follow the owner around
@@ -33,10 +61,9 @@ function defaultPrompt(name) {
   ].join(' ');
 }
 
-async function think(config, ctx) {
-  const { world, memories, ownerName, message, history } = ctx;
-
-  const system =
+function buildSystem(config, ctx) {
+  const { world, memories, ownerName } = ctx;
+  return (
     (config.systemPrompt || defaultPrompt(config.palName)) +
     `\n\nYou are in a Minecraft world as a player named "${config.palName}", on the same team as "${ownerName}".` +
     `\nWHAT YOU SENSE RIGHT NOW: ${world}` +
@@ -45,18 +72,63 @@ async function think(config, ctx) {
     `\n\n${ACTIONS_DOC}` +
     `\n\nThink step by step about the best plan, then reply with STRICT JSON only (no markdown, no prose around it):` +
     `\n{"say": "<short in-character chat, max ~180 chars>", "actions": [ <zero or more action objects above, in run order> ]}` +
-    `\nKeep "say" short and human. Put your plan in "actions" (ordered). Empty array if you're just talking.`;
+    `\nKeep "say" short and human. Put your plan in "actions" (ordered). Empty array if you're just talking.`
+  );
+}
 
+async function think(config, ctx) {
+  const system = buildSystem(config, ctx);
+  const backend = resolveBackend(config);
+  const content =
+    backend === 'claude'
+      ? await callClaude(config, system, ctx)
+      : await callOpenAI(config, system, ctx);
+  return parse((content || '').trim());
+}
+
+// --- backend: local Claude Max CLI (`claude -p`) -----------------------------
+function callClaude(config, system, ctx) {
+  return new Promise((resolve, reject) => {
+    const bin = findClaude();
+    // Claude models only — if config.model is a gpt-* default, fall back to a sensible Claude.
+    const model =
+      config.claudeModel ||
+      (String(config.model || '').startsWith('claude') ? config.model : 'claude-sonnet-4-6');
+
+    // Fold the short history + the new message into one prompt (claude -p takes a single prompt).
+    const lines = [];
+    for (const h of ctx.history || []) {
+      lines.push(`${h.role === 'assistant' ? config.palName : ctx.ownerName}: ${h.content}`);
+    }
+    lines.push(`${ctx.ownerName}: ${ctx.message}`);
+    lines.push('Respond now with the strict JSON described in your instructions.');
+    const prompt = lines.join('\n');
+
+    const env = Object.assign({}, process.env);
+    if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+      env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    }
+
+    execFile(
+      bin,
+      ['-p', prompt, '--append-system-prompt', system, '--model', model],
+      { env, timeout: 60000, maxBuffer: 4 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const hint = err.code === 'ENOENT' ? 'claude CLI not found — is it installed/on PATH?' : (stderr || err.message);
+          return reject(new Error(`claude cli: ${String(hint).slice(0, 200)}`));
+        }
+        resolve(stdout || '');
+      }
+    );
+  });
+}
+
+// --- backend: OpenAI-compatible HTTP endpoint --------------------------------
+async function callOpenAI(config, system, ctx) {
   const messages = [{ role: 'system', content: system }];
-  for (const h of history || []) messages.push(h);
-  messages.push({ role: 'user', content: `${ownerName}: ${message}` });
-
-  const body = {
-    model: config.model,
-    messages,
-    max_tokens: 400,
-    temperature: 0.7,
-  };
+  for (const h of ctx.history || []) messages.push(h);
+  messages.push({ role: 'user', content: `${ctx.ownerName}: ${ctx.message}` });
 
   const res = await fetch(config.apiUrl, {
     method: 'POST',
@@ -64,17 +136,15 @@ async function think(config, ctx) {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ model: config.model, messages, max_tokens: 400, temperature: 0.7 }),
   });
 
   if (!res.ok) {
     const t = await res.text().catch(() => '');
     throw new Error(`LLM HTTP ${res.status}: ${t.slice(0, 200)}`);
   }
-
   const data = await res.json();
-  const content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-  return parse(content.trim());
+  return (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
 }
 
 function parse(content) {
@@ -98,4 +168,4 @@ function parse(content) {
   }
 }
 
-module.exports = { think, parse };
+module.exports = { think, parse, resolveBackend, findClaude };
