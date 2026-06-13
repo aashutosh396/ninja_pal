@@ -68,8 +68,10 @@ Edit `config.json`:
    collect wood 3
    get tools                  ← chops wood + crafts a full tool set
    shelter                    ← boxes itself in (great at night)
+   set home  /  go home       ← remembers a spot across sessions
    give me the wood
-   make us a base             ← free-form: the brain plans collect -> tools -> shelter -> torch
+   mine me some iron          ← free-form: it makes a pickaxe + tunnels to ore
+   make us a base             ← free-form: plans collect -> tools -> shelter -> torch
    it's getting dark, what do we do?   ← free-form chat + it may act on its own
    ```
 
@@ -89,14 +91,22 @@ bot/
 - Auto-defense runs on a 1 s loop independent of the LLM, so the pal reacts to mobs instantly.
 - Your API key lives only in `config.json`, which is gitignored — never committed.
 
+## Memory & home
+
+The pal remembers across restarts (in `memory.json`, gitignored):
+
+- `set home` — saves its current spot; `go home` walks back there later
+- tell it things ("we're building a castle by the lake") and it saves them; you'll see it act on
+  them in future sessions
+
 ## Roadmap
 
 Done: follow / come / stop · auto-defend + best-weapon · collect · craft · give-to-owner ·
-auto-eat / self-heal · **multi-step planning** · **world perception** · **get-tools routine** ·
-**building (shelter / torch / pillar)** · teammate personality.
+auto-eat / self-heal · multi-step planning · world perception · get-tools routine ·
+building (shelter / torch / pillar) · **bow combat** · **flee when low health** ·
+**mine-to-ore / strip-mine** · **cross-session memory + home** · teammate personality.
 
 Next:
-- bridge across gaps + smarter structure building
-- ranged combat (bow) + retreat/flee when low health
-- mine to a target ore / strip-mine routine
-- longer memory across sessions; proactive idle behaviour
+- bridge across gaps + smarter multi-block structures
+- smelting / furnaces / auto-restock gear
+- proactive idle behaviour (it acts without being asked)

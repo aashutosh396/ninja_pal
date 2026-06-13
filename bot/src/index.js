@@ -11,6 +11,7 @@ const { plugin: pvp } = require('mineflayer-pvp');
 const collectBlock = require('mineflayer-collectblock').plugin;
 const { makeSkills } = require('./skills');
 const { think } = require('./brain');
+const memory = require('./memory');
 
 const cfgPath = path.join(__dirname, '..', 'config.json');
 if (!fs.existsSync(cfgPath)) {
@@ -20,7 +21,7 @@ if (!fs.existsSync(cfgPath)) {
 }
 const config = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
 
-const state = { mode: 'idle', autoDefend: true };
+const state = { mode: 'idle', autoDefend: true, panicking: false };
 const history = []; // recent chat turns fed back to the LLM for short-term memory
 
 const bot = mineflayer.createBot({
@@ -45,6 +46,7 @@ bot.once('spawn', () => {
 
   setInterval(() => {
     try {
+      skills.panicTick();  // flee/retreat takes priority when health is low
       skills.defendTick();
     } catch (e) {
       /* ignore transient combat errors */
@@ -80,6 +82,8 @@ async function handle(message) {
   if (/^(stand down|chill|relax|peace)$/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat('ok, standing down'); return; }
   if (/^(get tools|make tools|tools)$/.test(m)) return ack(await skills.getTools());
   if (/^(shelter|build shelter|cover|hide)$/.test(m)) return ack(await skills.build('shelter'));
+  if (/^(set home|sethome|home set)$/.test(m)) { memory.setHome(bot.entity.position); bot.chat('home set right here'); return; }
+  if (/^(go home|gohome|head home)$/.test(m)) return ack(goHome());
 
   // Everything else -> the LLM brain (chat + optional action).
   if (!config.apiKey) {
@@ -89,6 +93,7 @@ async function handle(message) {
   try {
     const { say, actions } = await think(config, {
       world: skills.perceive(),
+      memories: memory.summary(),
       ownerName: config.owner,
       message,
       history: history.slice(-8),
@@ -127,9 +132,21 @@ async function execute(action) {
     case 'get_tools': return await skills.getTools();
     case 'build': return await skills.build(a.what || 'shelter');
     case 'give': return await skills.giveToOwner(a.item || 'all', a.count);
+    case 'shoot': return await skills.rangedAttackNearest();
+    case 'mine': return await skills.mineOre(a.ore || a.block || 'iron', a.count || 1);
     case 'goto': return skills.gotoCoord(Number(a.x), Number(a.y), Number(a.z));
+    case 'sethome': memory.setHome(bot.entity.position); return null;
+    case 'gohome': return goHome();
+    case 'remember': memory.add(a.note); return null;
     default: return null;
   }
+}
+
+// Walk back to the saved home position, if one exists.
+function goHome() {
+  const h = memory.getHome();
+  if (!h) return "i don't have a home set — say \"set home\" where you want it";
+  return skills.gotoCoord(h.x, h.y, h.z);
 }
 
 function ack(err) {

@@ -182,7 +182,7 @@ function makeSkills(bot, config, state) {
   // Reactive defense — run on a short timer. Auto-engages hostiles near the owner or the
   // pal itself, independent of the LLM so it reacts instantly.
   function defendTick() {
-    if (!state.autoDefend) return;
+    if (!state.autoDefend || state.panicking) return; // don't re-engage while fleeing
     const owner = findOwner();
     const ref = owner ? owner.position : bot.entity.position;
     const target = bot.nearestEntity(
@@ -433,6 +433,124 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
+  // ---- ranged combat, mining, survival --------------------------------------
+
+  // Shoot the nearest hostile with a bow (falls back to melee if no bow/arrows).
+  async function rangedAttackNearest() {
+    const target = bot.nearestEntity((e) => e.type === 'mob' && HOSTILES.has(e.name));
+    if (!target) return 'nothing to shoot at';
+    const bow = bot.inventory.items().find((i) => i.name === 'bow');
+    const arrows = bot.inventory.items().find((i) => i.name === 'arrow');
+    if (!bow || !arrows) {
+      equipBestWeapon();
+      bot.pvp.attack(target);
+      return null;
+    }
+    try {
+      await bot.equip(bow, 'hand');
+      const aim = () => bot.lookAt(target.position.offset(0, (target.height || 1.6) * 0.5, 0), true);
+      await aim();
+      bot.activateItem(); // draw the bow
+      await new Promise((r) => setTimeout(r, 1100));
+      await aim();
+      bot.deactivateItem(); // release
+    } catch (e) {
+      /* shot interrupted */
+    }
+    return null;
+  }
+
+  async function ensurePickaxe() {
+    const pick = bot.inventory.items().find((i) => i.name.endsWith('_pickaxe'));
+    if (pick) {
+      try { await bot.equip(pick, 'hand'); } catch (e) { /* ignore */ }
+      return true;
+    }
+    return false;
+  }
+
+  function forwardCardinal() {
+    const yaw = bot.entity.yaw;
+    let dx = Math.round(-Math.sin(yaw));
+    let dz = Math.round(-Math.cos(yaw));
+    if (dx === 0 && dz === 0) dx = 1; // facing a diagonal — pick one axis
+    return { dx, dz };
+  }
+
+  // Dig a 1x2 corridor straight ahead, advancing one block at a time.
+  async function tunnelForward(steps = 8) {
+    const { dx, dz } = forwardCardinal();
+    for (let i = 0; i < steps; i++) {
+      const base = bot.entity.position.floored();
+      for (const dy of [0, 1]) {
+        const b = bot.blockAt(base.offset(dx, dy, dz));
+        if (b && b.boundingBox === 'block' && b.name !== 'bedrock') {
+          try { if (bot.canDigBlock(b)) await bot.dig(b); } catch (e) { /* skip */ }
+        }
+      }
+      try {
+        await bot.pathfinder.goto(new goals.GoalNear(base.x + dx, base.y, base.z + dz, 0));
+      } catch (e) {
+        break;
+      }
+    }
+  }
+
+  // Mine a target ore: grab it if it's in range, otherwise tunnel to expose more ground.
+  async function mineOre(oreName, count = 1) {
+    if (!(await ensurePickaxe())) {
+      const e = await getTools(); // make a wooden pickaxe first
+      if (!(await ensurePickaxe())) return e || 'i need a pickaxe to mine that';
+    }
+    const mcData = require('minecraft-data')(bot.version);
+    const ids = resolveBlockNames(oreName)
+      .map((n) => mcData.blocksByName[n] && mcData.blocksByName[n].id)
+      .filter((x) => x != null);
+    if (!ids.length) return `i don't know the ore "${oreName}"`;
+
+    const want = Math.max(1, Math.min(count | 0 || 1, 16));
+    let got = 0;
+    for (let cycle = 0; cycle < 10 && got < want; cycle++) {
+      const block = bot.findBlock({ matching: ids, maxDistance: 48 });
+      if (block) {
+        try { await bot.collectBlock.collect(block); got++; continue; } catch (e) { /* fall through */ }
+      }
+      await tunnelForward(6); // dig deeper / further and look again
+    }
+    if (!got) return `couldn't reach any ${oreName} (tried tunnelling)`;
+    return null;
+  }
+
+  // Retreat when badly hurt: stop fighting, run to the owner, or flee from the threat.
+  function panicTick() {
+    if (bot.health > 6) {
+      if (state.panicking) {
+        state.panicking = false;
+        if (state.mode === 'follow') followOwner();
+      }
+      return;
+    }
+    if (!state.panicking) {
+      state.panicking = true;
+      bot.chat('im low, falling back!');
+    }
+    if (bot.pvp && bot.pvp.target) bot.pvp.stop();
+
+    const owner = findOwner();
+    if (owner) {
+      bot.pathfinder.setGoal(new goals.GoalFollow(owner, 2), true);
+      return;
+    }
+    const threat = bot.nearestEntity((e) => e.type === 'mob' && HOSTILES.has(e.name));
+    if (threat && bot.entity.position.distanceTo(threat.position) < 16) {
+      const away = bot.entity.position.minus(threat.position);
+      if (away.norm() > 0.1) {
+        const dest = bot.entity.position.plus(away.normalize().scaled(8));
+        bot.pathfinder.setGoal(new goals.GoalNear(dest.x, dest.y, dest.z, 1));
+      }
+    }
+  }
+
   return {
     findOwner,
     inventorySummary,
@@ -455,6 +573,10 @@ function makeSkills(bot, config, state) {
     pillarUp,
     build,
     getTools,
+    rangedAttackNearest,
+    mineOre,
+    tunnelForward,
+    panicTick,
     HOSTILES,
   };
 }

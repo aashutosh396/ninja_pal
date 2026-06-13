@@ -13,8 +13,13 @@ const ACTIONS_DOC = `Actions you can plan (list them in the order they should ru
 - {"name":"get_tools"}                                chop wood and craft a full set of wooden tools (pickaxe, axe, sword). a ready-made multi-step routine.
 - {"name":"build","args":{"what":"shelter"}}         build something: "shelter" (box yourself in), "torch" (light the area), or "pillar" (tower up).
 - {"name":"give","args":{"item":"wood","count":10}}  walk to the owner and drop items. item can be "all" or a name/alias.
-- {"name":"attack"}                                  attack the nearest hostile mob
-- {"name":"goto","args":{"x":100,"y":64,"z":-200}}   walk to coordinates`;
+- {"name":"attack"}                                  attack the nearest hostile mob (melee)
+- {"name":"shoot"}                                   shoot the nearest hostile with a bow (falls back to melee)
+- {"name":"mine","args":{"ore":"iron","count":3}}    mine a target ore (iron, coal, gold, diamond, …), tunnelling if needed
+- {"name":"goto","args":{"x":100,"y":64,"z":-200}}   walk to coordinates
+- {"name":"sethome"}                                 remember your current spot as home
+- {"name":"gohome"}                                  walk back to the saved home
+- {"name":"remember","args":{"note":"the owner likes building near water"}}  save a fact to long-term memory`;
 
 function defaultPrompt(name) {
   return [
@@ -29,12 +34,14 @@ function defaultPrompt(name) {
 }
 
 async function think(config, ctx) {
-  const { world, ownerName, message, history } = ctx;
+  const { world, memories, ownerName, message, history } = ctx;
 
   const system =
     (config.systemPrompt || defaultPrompt(config.palName)) +
     `\n\nYou are in a Minecraft world as a player named "${config.palName}", on the same team as "${ownerName}".` +
     `\nWHAT YOU SENSE RIGHT NOW: ${world}` +
+    `\nWHAT YOU REMEMBER (across sessions): ${memories || 'nothing yet'}` +
+    `\nIf the owner tells you something worth keeping (a plan, a preference, a location), add a "remember" action.` +
     `\n\n${ACTIONS_DOC}` +
     `\n\nThink step by step about the best plan, then reply with STRICT JSON only (no markdown, no prose around it):` +
     `\n{"say": "<short in-character chat, max ~180 chars>", "actions": [ <zero or more action objects above, in run order> ]}` +
