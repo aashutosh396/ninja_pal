@@ -1,0 +1,20 @@
+{
+	"schemaVersion": 1,
+	"id": "ninja_pal",
+	"version": "${version}",
+	"name": "Ninja Pal",
+	"description": "AI Pal mod for Minecraft. Phase 1: a /spawn command that teleports you to the world spawn point.",
+	"authors": ["MARG"],
+	"contact": {},
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": ["com.marg.ninjapal.NinjaPal"]
+	},
+	"depends": {
+		"fabricloader": ">=0.15.0",
+		"minecraft": "~1.20.4",
+		"java": ">=17",
+		"fabric-api": "*"
+	}
+}
