@@ -3,7 +3,7 @@
 	"id": "ninja_pal",
 	"version": "${version}",
 	"name": "Ninja Pal",
-	"description": "AI Pal mod for Minecraft. Phase 1: a /spawn command that teleports you to the world spawn point.",
+	"description": "AI Pal mod for Minecraft. /spawn teleports you to world spawn; /pal <message> talks to an AI companion that replies in chat (OpenAI-compatible, configured in config/ninja_pal.json).",
 	"authors": ["MARG"],
 	"contact": {},
 	"license": "MIT",
