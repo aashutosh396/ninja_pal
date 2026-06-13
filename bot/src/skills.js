@@ -4,6 +4,20 @@
 // with index.js so the chat handler and the defense loop see the same flags.
 
 const { goals, Movements } = require('mineflayer-pathfinder');
+const { Vec3 } = require('vec3');
+
+// Blocks the pal will happily place when building (preferred order).
+const BUILD_BLOCKS = [
+  'cobblestone', 'dirt', 'stone', 'netherrack', 'cobbled_deepslate', 'deepslate',
+  'andesite', 'diorite', 'granite', 'oak_planks', 'spruce_planks', 'birch_planks',
+];
+
+// Log -> plank mapping for the "get tools" multi-step task.
+const LOG_TO_PLANK = {
+  oak_log: 'oak_planks', birch_log: 'birch_planks', spruce_log: 'spruce_planks',
+  jungle_log: 'jungle_planks', acacia_log: 'acacia_planks', dark_oak_log: 'dark_oak_planks',
+  mangrove_log: 'mangrove_planks', cherry_log: 'cherry_planks',
+};
 
 const HOSTILES = new Set([
   'zombie', 'husk', 'drowned', 'zombie_villager', 'skeleton', 'stray', 'wither_skeleton',
@@ -53,6 +67,34 @@ function makeSkills(bot, config, state) {
     return Object.entries(counts)
       .map(([n, c]) => `${c} ${n}`)
       .join(', ');
+  }
+
+  // A rich snapshot of what the pal can sense — fed to the brain so it reasons about the
+  // actual situation (night? mobs closing in? low food? what's in the bag?).
+  function perceive() {
+    const pos = bot.entity ? bot.entity.position : new Vec3(0, 0, 0);
+    const t = (bot.time && bot.time.timeOfDay) || 0;
+    const isNight = t > 13000 && t < 23000;
+    const hostiles = Object.values(bot.entities)
+      .filter((e) => e.type === 'mob' && HOSTILES.has(e.name) && e.position)
+      .map((e) => ({ name: e.name, d: Math.round(e.position.distanceTo(pos)) }))
+      .filter((e) => e.d < 32)
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 5);
+    const players = Object.values(bot.players)
+      .filter((p) => p.entity && p.username !== bot.username)
+      .map((p) => p.username);
+    return [
+      `pos=(${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)})`,
+      `time=${isNight ? 'NIGHT' : 'day'}`,
+      `health=${Math.round(bot.health)}/20`,
+      `food=${Math.round(bot.food)}/20`,
+      `mode=${state.mode}`,
+      `autoDefend=${state.autoDefend}`,
+      `threats=[${hostiles.map((h) => `${h.name}@${h.d}m`).join(', ') || 'none'}]`,
+      `players=[${players.join(', ') || 'none'}]`,
+      `carrying=[${inventorySummary()}]`,
+    ].join(' | ');
   }
 
   function equipBestWeapon() {
@@ -225,9 +267,176 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
+  // ---- building -------------------------------------------------------------
+
+  function placeableItem(preferred) {
+    const items = bot.inventory.items();
+    const mcData = require('minecraft-data')(bot.version);
+    for (const name of preferred) {
+      const it = items.find((i) => i.name === name);
+      if (it) return it;
+    }
+    for (const it of items) {
+      if (mcData.blocksByName[it.name]) return it; // any item that is also a placeable block
+    }
+    return null;
+  }
+
+  // Place a block at an exact world position, finding a solid neighbour to place against.
+  async function placeBlockAt(targetPos, preferred = BUILD_BLOCKS) {
+    const existing = bot.blockAt(targetPos);
+    if (existing && existing.boundingBox === 'block') return null; // already solid
+    const item = placeableItem(preferred);
+    if (!item) return 'no blocks to place';
+    try {
+      await bot.equip(item, 'hand');
+    } catch (e) {
+      return 'couldn\'t hold a block';
+    }
+    const dirs = [
+      new Vec3(0, -1, 0), new Vec3(0, 1, 0), new Vec3(1, 0, 0),
+      new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1),
+    ];
+    for (const d of dirs) {
+      const refPos = targetPos.plus(d);
+      const ref = bot.blockAt(refPos);
+      if (ref && ref.boundingBox === 'block') {
+        try {
+          await bot.placeBlock(ref, new Vec3(-d.x, -d.y, -d.z)); // face points back to target
+          return null;
+        } catch (e) {
+          /* try next neighbour */
+        }
+      }
+    }
+    return 'couldn\'t place there';
+  }
+
+  // Box the pal in with a quick 1x1 shelter (walls + roof) — emergency survival.
+  async function shelter() {
+    const base = bot.entity.position.floored();
+    const cells = [
+      [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],
+      [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1],
+      [0, 2, 0],
+    ];
+    let placed = 0;
+    for (const c of cells) {
+      const err = await placeBlockAt(base.offset(c[0], c[1], c[2]));
+      if (!err) placed++;
+    }
+    return placed > 0 ? null : 'i have no blocks to build a shelter';
+  }
+
+  // Light up the area with a torch if the pal has any.
+  async function torchArea() {
+    const torch = bot.inventory.items().find((i) => i.name === 'torch');
+    if (!torch) return "i don't have any torches";
+    await bot.equip(torch, 'hand');
+    const base = bot.entity.position.floored();
+    for (const s of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
+      const ref = bot.blockAt(base.offset(s[0], -1, s[2]));
+      if (ref && ref.boundingBox === 'block') {
+        try {
+          await bot.placeBlock(ref, new Vec3(0, 1, 0));
+          return null;
+        } catch (e) {
+          /* try next spot */
+        }
+      }
+    }
+    return "couldn't place a torch here";
+  }
+
+  // Tower straight up N blocks (jump + place under self). Best-effort.
+  async function pillarUp(height = 3) {
+    const item = placeableItem(BUILD_BLOCKS);
+    if (!item) return 'no blocks to pillar with';
+    for (let i = 0; i < Math.min(height | 0 || 3, 16); i++) {
+      try {
+        await bot.equip(item, 'hand');
+        bot.setControlState('jump', true);
+        await new Promise((r) => setTimeout(r, 160));
+        const ref = bot.blockAt(bot.entity.position.offset(0, -1, 0));
+        await bot.placeBlock(ref, new Vec3(0, 1, 0));
+      } catch (e) {
+        /* keep trying the rest */
+      } finally {
+        bot.setControlState('jump', false);
+      }
+    }
+    return null;
+  }
+
+  // Dispatcher so the LLM has one "build" action with a target.
+  async function build(what) {
+    const w = String(what || 'shelter').toLowerCase().trim();
+    if (w.includes('torch') || w.includes('light')) return torchArea();
+    if (w.includes('pillar') || w.includes('tower')) return pillarUp(4);
+    return shelter();
+  }
+
+  // ---- multi-step task: get wood and craft a full set of wooden tools --------
+
+  function countLogs() {
+    return bot.inventory.items().filter((i) => LOG_TO_PLANK[i.name]).reduce((a, b) => a + b.count, 0);
+  }
+
+  async function craftPlanksFromLogs() {
+    const logs = bot.inventory.items().filter((i) => LOG_TO_PLANK[i.name]);
+    for (const l of logs) {
+      await craft(LOG_TO_PLANK[l.name], l.count);
+    }
+  }
+
+  async function placeCraftingTable() {
+    const item = bot.inventory.items().find((i) => i.name === 'crafting_table');
+    if (!item) return "couldn't make a crafting table";
+    await bot.equip(item, 'hand');
+    const base = bot.entity.position.floored();
+    for (const s of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]]) {
+      const ref = bot.blockAt(base.offset(s[0], -1, s[2]));
+      const target = bot.blockAt(base.offset(s[0], 0, s[2]));
+      if (ref && ref.boundingBox === 'block' && target && target.boundingBox === 'empty') {
+        try {
+          await bot.placeBlock(ref, new Vec3(0, 1, 0));
+          return null;
+        } catch (e) {
+          /* try next spot */
+        }
+      }
+    }
+    return "couldn't find a spot for the crafting table";
+  }
+
+  async function getTools() {
+    if (countLogs() < 3) {
+      bot.chat('grabbing some wood first');
+      const err = await collect('wood', 3 - countLogs());
+      if (err) return err;
+    }
+    bot.chat('crafting planks + a table');
+    await craftPlanksFromLogs();
+    await craft('crafting_table', 1);
+    const tableErr = await placeCraftingTable();
+    if (tableErr) return tableErr;
+    await craft('stick', 1);
+    await craftPlanksFromLogs(); // top up planks for the tools
+
+    const made = [];
+    for (const tool of ['wooden_pickaxe', 'wooden_axe', 'wooden_sword']) {
+      const err = await craft(tool, 1);
+      if (!err) made.push(tool.replace('wooden_', ''));
+    }
+    if (!made.length) return "got the wood but ran short on planks/sticks for the tools";
+    bot.chat(`made: ${made.join(', ')}`);
+    return null;
+  }
+
   return {
     findOwner,
     inventorySummary,
+    perceive,
     setMovements,
     followOwner,
     stop,
@@ -240,6 +449,12 @@ function makeSkills(bot, config, state) {
     eatTick,
     craft,
     giveToOwner,
+    placeBlockAt,
+    shelter,
+    torchArea,
+    pillarUp,
+    build,
+    getTools,
     HOSTILES,
   };
 }

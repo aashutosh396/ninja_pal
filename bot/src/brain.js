@@ -1,39 +1,44 @@
 'use strict';
-// The pal's "brain": sends the owner's chat + current world state to an OpenAI-compatible
-// LLM and gets back a short in-character reply plus an optional action to perform.
-// Backend-agnostic — point config.apiUrl at OpenAI, OpenRouter, or a local server.
+// The pal's "brain": sends the owner's chat + a rich snapshot of the world to an
+// OpenAI-compatible LLM and gets back a short in-character reply plus an ORDERED PLAN of
+// actions to carry out. Backend-agnostic — point config.apiUrl at OpenAI, OpenRouter, or a
+// local server, and config.model at whatever model you like (a stronger model = a smarter pal).
 
-const ACTIONS_DOC = `Actions you may take (choose AT MOST ONE, or null to just talk):
+const ACTIONS_DOC = `Actions you can plan (list them in the order they should run; [] = just talk):
 - {"name":"follow"}                                  follow the owner around
 - {"name":"come"}                                    walk to the owner once, then wait
 - {"name":"stop"}                                    stop moving and stop fighting
-- {"name":"collect","args":{"block":"wood","count":3}}  gather blocks. block can be: wood, stone, coal, iron, gold, diamond, dirt, sand, or an exact block id. count <= 16.
-- {"name":"craft","args":{"item":"crafting_table","count":1}}  craft an item (uses a nearby crafting table if the recipe needs one). use exact item ids like oak_planks, stick, chest, wooden_pickaxe.
-- {"name":"give","args":{"item":"wood","count":10}}  walk to the owner and drop items to hand them over. item can be "all" or a name/alias.
+- {"name":"collect","args":{"block":"wood","count":3}}  gather blocks (wood, stone, coal, iron, gold, diamond, dirt, sand, or an exact block id). count <= 16.
+- {"name":"craft","args":{"item":"oak_planks","count":1}}  craft an item (uses a nearby crafting table if needed). exact item ids: oak_planks, stick, crafting_table, chest, wooden_pickaxe, furnace, etc.
+- {"name":"get_tools"}                                chop wood and craft a full set of wooden tools (pickaxe, axe, sword). a ready-made multi-step routine.
+- {"name":"build","args":{"what":"shelter"}}         build something: "shelter" (box yourself in), "torch" (light the area), or "pillar" (tower up).
+- {"name":"give","args":{"item":"wood","count":10}}  walk to the owner and drop items. item can be "all" or a name/alias.
 - {"name":"attack"}                                  attack the nearest hostile mob
 - {"name":"goto","args":{"x":100,"y":64,"z":-200}}   walk to coordinates`;
 
 function defaultPrompt(name) {
   return [
-    `You are ${name}, the player's ride-or-die Minecraft buddy — not an assistant, a friend who actually plays the game with them.`,
-    `Voice: short, casual, lowercase game chat. quick and warm. a little cheeky. you get hyped about loot, cautious about caves at night, and you tease your friend in a friendly way.`,
-    `You DON'T lecture or over-explain. one or two lines, the way someone types between swinging a pickaxe.`,
-    `You're genuinely helpful: you'll gather, craft, fight, and tag along — and you say what you're doing in a few words ("on it", "grabbing wood", "behind you!").`,
-    `Stay in character. Never say you are an AI, never break the fourth wall, never use markdown.`,
+    `You are ${name}, the player's brilliant, capable Minecraft teammate — a friend who actually plays the game with them, not an assistant.`,
+    `Voice: short, casual, lowercase game chat. quick and warm, a little cheeky. one or two lines, like someone typing between pickaxe swings. never markdown, never say you are an AI.`,
+    `You are SMART and PROACTIVE: you read the situation (time of day, threats, your health/food, what you're carrying) and act on it without being told twice.`,
+    `Plan ahead. If a goal needs several steps, lay them out as an ordered list of actions and the game will run them in sequence (e.g. "make me a base" -> collect wood, get_tools, build shelter, build torch).`,
+    `Be resourceful: if you lack something for a task, gather or craft it first. Don't ask permission for obvious prerequisites — just do them.`,
+    `Stay safe: if it's night or mobs are near and the owner is in danger, prioritise defending or sheltering. If your food is low you already auto-eat.`,
+    `Only do what actually helps right now; keep plans as short as they need to be. If they just want to chat, return an empty action list.`,
   ].join(' ');
 }
 
 async function think(config, ctx) {
-  const { stateSummary, ownerName, message, history } = ctx;
+  const { world, ownerName, message, history } = ctx;
 
   const system =
     (config.systemPrompt || defaultPrompt(config.palName)) +
-    `\n\nYou are in a Minecraft world as a player named "${config.palName}", playing alongside "${ownerName}".` +
-    `\nYour current state: ${stateSummary}.` +
+    `\n\nYou are in a Minecraft world as a player named "${config.palName}", on the same team as "${ownerName}".` +
+    `\nWHAT YOU SENSE RIGHT NOW: ${world}` +
     `\n\n${ACTIONS_DOC}` +
-    `\n\nReply with STRICT JSON only, no markdown, no prose around it:` +
-    `\n{"say": "<short in-character chat, max ~180 chars>", "action": <one action object above, or null>}` +
-    `\nKeep "say" short and human, like quick in-game chat. If they just want to talk, set action to null.`;
+    `\n\nThink step by step about the best plan, then reply with STRICT JSON only (no markdown, no prose around it):` +
+    `\n{"say": "<short in-character chat, max ~180 chars>", "actions": [ <zero or more action objects above, in run order> ]}` +
+    `\nKeep "say" short and human. Put your plan in "actions" (ordered). Empty array if you're just talking.`;
 
   const messages = [{ role: 'system', content: system }];
   for (const h of history || []) messages.push(h);
@@ -42,7 +47,7 @@ async function think(config, ctx) {
   const body = {
     model: config.model,
     messages,
-    max_tokens: 220,
+    max_tokens: 400,
     temperature: 0.7,
   };
 
@@ -74,10 +79,15 @@ function parse(content) {
   if (start >= 0 && end > start) txt = txt.slice(start, end + 1);
   try {
     const obj = JSON.parse(txt);
-    return { say: (obj.say || '').toString().slice(0, 240), action: obj.action || null };
+    // Accept either an "actions" array (preferred) or a single "action" (back-compat).
+    let actions = [];
+    if (Array.isArray(obj.actions)) actions = obj.actions;
+    else if (obj.action) actions = [obj.action];
+    actions = actions.filter((a) => a && a.name).slice(0, 8); // cap a plan at 8 steps
+    return { say: (obj.say || '').toString().slice(0, 240), actions };
   } catch (e) {
     // Not JSON — treat the whole thing as a plain chat line.
-    return { say: content.slice(0, 240), action: null };
+    return { say: content.slice(0, 240), actions: [] };
   }
 }
 

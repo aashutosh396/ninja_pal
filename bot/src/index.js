@@ -78,6 +78,8 @@ async function handle(message) {
   if (/^(come|come here|here|to me)$/.test(m)) return ack(skills.come());
   if (/^(defend|protect|guard)( me)?$/.test(m)) { state.autoDefend = true; bot.chat('got your back'); return; }
   if (/^(stand down|chill|relax|peace)$/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat('ok, standing down'); return; }
+  if (/^(get tools|make tools|tools)$/.test(m)) return ack(await skills.getTools());
+  if (/^(shelter|build shelter|cover|hide)$/.test(m)) return ack(await skills.build('shelter'));
 
   // Everything else -> the LLM brain (chat + optional action).
   if (!config.apiKey) {
@@ -85,41 +87,49 @@ async function handle(message) {
     return;
   }
   try {
-    const stateSummary = `mode=${state.mode}, autoDefend=${state.autoDefend}, health=${Math.round(bot.health)}, food=${Math.round(bot.food)}, carrying=[${skills.inventorySummary()}]`;
-    const { say, action } = await think(config, {
-      stateSummary,
+    const { say, actions } = await think(config, {
+      world: skills.perceive(),
       ownerName: config.owner,
       message,
-      history: history.slice(-6),
+      history: history.slice(-8),
     });
     history.push({ role: 'user', content: `${config.owner}: ${message}` });
     if (say) {
       bot.chat(say);
       history.push({ role: 'assistant', content: say });
     }
-    if (action) await execute(action);
+    // Run the plan in order; stop early if a step reports it can't proceed.
+    for (const action of actions) {
+      const err = await execute(action);
+      if (err) {
+        bot.chat(err);
+        break;
+      }
+    }
   } catch (e) {
     console.error('[Ninja Pal] brain:', e.message);
     bot.chat('uh my brain glitched, say that again?');
   }
 }
 
+// Run one action; returns an error string (to surface + halt the plan) or null on success.
 async function execute(action) {
-  if (!action || !action.name) return;
+  if (!action || !action.name) return null;
   const a = action.args || {};
-  let err = null;
+  console.log('[Ninja Pal] action:', action.name, JSON.stringify(a));
   switch (action.name) {
-    case 'follow': err = skills.followOwner(); break;
-    case 'come': err = skills.come(); break;
-    case 'stop': err = skills.stop(); break;
-    case 'attack': err = skills.attackNearest(); break;
-    case 'collect': err = await skills.collect(a.block || 'wood', a.count || 1); break;
-    case 'craft': err = await skills.craft(a.item, a.count || 1); break;
-    case 'give': err = await skills.giveToOwner(a.item || 'all', a.count); break;
-    case 'goto': err = skills.gotoCoord(Number(a.x), Number(a.y), Number(a.z)); break;
-    default: err = null;
+    case 'follow': return skills.followOwner();
+    case 'come': return skills.come();
+    case 'stop': return skills.stop();
+    case 'attack': return skills.attackNearest();
+    case 'collect': return await skills.collect(a.block || 'wood', a.count || 1);
+    case 'craft': return await skills.craft(a.item, a.count || 1);
+    case 'get_tools': return await skills.getTools();
+    case 'build': return await skills.build(a.what || 'shelter');
+    case 'give': return await skills.giveToOwner(a.item || 'all', a.count);
+    case 'goto': return skills.gotoCoord(Number(a.x), Number(a.y), Number(a.z));
+    default: return null;
   }
-  if (err) bot.chat(err);
 }
 
 function ack(err) {

@@ -3,14 +3,22 @@
 An AI companion that joins your Minecraft world as a **real second player** (Mineflayer + an
 LLM brain). It shows up in the player list, has a body, and plays alongside you:
 
+- **plans multi-step goals** — the brain returns an ordered plan, so "make me a base" becomes
+  gather wood → craft tools → build a shelter → light it, run in sequence
+- **senses the world** — it reasons over its position, time of day (night!), nearby threats and
+  their distances, players around, its health/food, and what it's carrying
 - **follows** you, **comes** / **stops** on command
 - **defends** you — auto-attacks hostile mobs near you, auto-equips its best weapon first
 - **gathers** blocks on request (`collect wood`, `mine iron`, …)
 - **crafts** items (`craft oak_planks`, uses a nearby crafting table when needed)
+- **gets tools** — one command chops wood and crafts a full set of wooden tools
+- **builds** — `shelter` (box itself in), `torch` (light the area), `pillar` (tower up)
 - **hands you loot** — walks over and drops items (`give wood`, `give all`)
 - **self-sustains** — auto-eats when hungry so it doesn't starve / heals via regen
-- **chats** with you via the LLM (with a real buddy personality), which also knows what it's
-  carrying and can trigger any action above
+- **chats** via the LLM with a real teammate personality
+
+> **Smarter pal = stronger model.** The pal's intelligence comes from `config.model`. Default is
+> `gpt-4o`; a top-tier model plans better. Point `apiUrl`/`model` at OpenRouter to use Claude, etc.
 
 > This is separate from the Fabric mod at the repo root (that one adds `/spawn`). The bot is a
 > standalone program you run next to Minecraft.
@@ -56,13 +64,13 @@ Edit `config.json`:
 
    ```
    follow me
-   stop
-   come
+   stop  /  come  /  defend
    collect wood 3
-   defend
-   craft me some planks       ← free-form, the brain picks the craft action
+   get tools                  ← chops wood + crafts a full tool set
+   shelter                    ← boxes itself in (great at night)
    give me the wood
-   what should we build?      ← free-form chat
+   make us a base             ← free-form: the brain plans collect -> tools -> shelter -> torch
+   it's getting dark, what do we do?   ← free-form chat + it may act on its own
    ```
 
 ## How it works
@@ -83,11 +91,12 @@ bot/
 
 ## Roadmap
 
-Done: follow / come / stop · auto-defend + best-weapon · collect · **craft** · **give to owner**
-· **auto-eat / self-heal** · inventory-aware chat + buddy personality.
+Done: follow / come / stop · auto-defend + best-weapon · collect · craft · give-to-owner ·
+auto-eat / self-heal · **multi-step planning** · **world perception** · **get-tools routine** ·
+**building (shelter / torch / pillar)** · teammate personality.
 
 Next:
-- build simple structures (place blocks: shelter, bridge, torch the area)
-- multi-step tasks ("get wood then craft tools", "strip-mine to bedrock")
-- ranged combat (bow) + smarter retreat when low health
-- longer memory across sessions
+- bridge across gaps + smarter structure building
+- ranged combat (bow) + retreat/flee when low health
+- mine to a target ore / strip-mine routine
+- longer memory across sessions; proactive idle behaviour
