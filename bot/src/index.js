@@ -51,6 +51,11 @@ bot.once('spawn', () => {
     }
   }, 1000);
 
+  // Stay fed (and thus self-heal via natural regen).
+  setInterval(() => {
+    skills.eatTick().catch(() => {});
+  }, 2500);
+
   // start by tagging along if the owner is in sight
   setTimeout(() => {
     if (state.mode === 'idle') skills.followOwner();
@@ -80,7 +85,7 @@ async function handle(message) {
     return;
   }
   try {
-    const stateSummary = `mode=${state.mode}, autoDefend=${state.autoDefend}, health=${Math.round(bot.health)}, food=${Math.round(bot.food)}`;
+    const stateSummary = `mode=${state.mode}, autoDefend=${state.autoDefend}, health=${Math.round(bot.health)}, food=${Math.round(bot.food)}, carrying=[${skills.inventorySummary()}]`;
     const { say, action } = await think(config, {
       stateSummary,
       ownerName: config.owner,
@@ -109,6 +114,8 @@ async function execute(action) {
     case 'stop': err = skills.stop(); break;
     case 'attack': err = skills.attackNearest(); break;
     case 'collect': err = await skills.collect(a.block || 'wood', a.count || 1); break;
+    case 'craft': err = await skills.craft(a.item, a.count || 1); break;
+    case 'give': err = await skills.giveToOwner(a.item || 'all', a.count); break;
     case 'goto': err = skills.gotoCoord(Number(a.x), Number(a.y), Number(a.z)); break;
     default: err = null;
   }

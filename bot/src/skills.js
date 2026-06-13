@@ -32,9 +32,38 @@ function resolveBlockNames(name) {
   return BLOCK_ALIASES[n] || [n];
 }
 
+// Best-first melee weapons (the pal equips the strongest it owns before fighting).
+const WEAPONS = [
+  'netherite_sword', 'diamond_sword', 'iron_sword', 'stone_sword', 'golden_sword', 'wooden_sword',
+  'netherite_axe', 'diamond_axe', 'iron_axe', 'stone_axe', 'golden_axe', 'wooden_axe',
+];
+
 function makeSkills(bot, config, state) {
+  let eating = false;
+
   function findOwner() {
     return (bot.players[config.owner] && bot.players[config.owner].entity) || null;
+  }
+
+  function inventorySummary() {
+    const items = bot.inventory.items();
+    if (!items.length) return 'empty';
+    const counts = {};
+    for (const it of items) counts[it.name] = (counts[it.name] || 0) + it.count;
+    return Object.entries(counts)
+      .map(([n, c]) => `${c} ${n}`)
+      .join(', ');
+  }
+
+  function equipBestWeapon() {
+    const items = bot.inventory.items();
+    for (const name of WEAPONS) {
+      const it = items.find((i) => i.name === name);
+      if (it) {
+        bot.equip(it, 'hand').catch(() => {});
+        return;
+      }
+    }
   }
 
   function setMovements() {
@@ -103,6 +132,7 @@ function makeSkills(bot, config, state) {
   function attackNearest() {
     const target = bot.nearestEntity((e) => e.type === 'mob' && HOSTILES.has(e.name));
     if (!target) return 'nothing to fight nearby';
+    equipBestWeapon();
     bot.pvp.attack(target);
     return null;
   }
@@ -116,11 +146,88 @@ function makeSkills(bot, config, state) {
     const target = bot.nearestEntity(
       (e) => e.type === 'mob' && HOSTILES.has(e.name) && e.position.distanceTo(ref) < 12
     );
-    if (target && !bot.pvp.target) bot.pvp.attack(target);
+    if (target && !bot.pvp.target) {
+      equipBestWeapon();
+      bot.pvp.attack(target);
+    }
+  }
+
+  // Auto-eat when hungry so the pal doesn't starve (and natural regen keeps health up).
+  async function eatTick() {
+    if (eating || bot.food >= 18) return;
+    const mcData = require('minecraft-data')(bot.version);
+    const food = bot.inventory.items().find((i) => mcData.foodsByName[i.name]);
+    if (!food) return;
+    eating = true;
+    try {
+      await bot.equip(food, 'hand');
+      await bot.consume();
+    } catch (e) {
+      /* interrupted / not edible right now */
+    } finally {
+      eating = false;
+    }
+  }
+
+  // Craft an item, using a nearby crafting table when the recipe needs one.
+  async function craft(itemName, count = 1) {
+    const mcData = require('minecraft-data')(bot.version);
+    const item = mcData.itemsByName[String(itemName || '').toLowerCase().trim()];
+    if (!item) return `i don't know the item "${itemName}"`;
+
+    const tableId = mcData.blocksByName.crafting_table.id;
+    const table = bot.findBlock({ matching: tableId, maxDistance: 32 });
+    const want = Math.max(1, Math.min(count | 0 || 1, 64));
+
+    const withTable = table ? bot.recipesFor(item.id, null, 1, table) : [];
+    const withoutTable = bot.recipesFor(item.id, null, 1, null);
+    const recipe = withoutTable[0] || withTable[0];
+    if (!recipe) return `i can't craft ${itemName} with what i have`;
+
+    const needTable = recipe.requiresTable;
+    if (needTable && !table) return `i need a crafting table near me to make ${itemName}`;
+
+    try {
+      if (needTable) {
+        await bot.pathfinder.goto(new goals.GoalNear(table.position.x, table.position.y, table.position.z, 2));
+      }
+      await bot.craft(recipe, want, needTable ? table : null);
+      return null;
+    } catch (e) {
+      return `crafting ${itemName} failed: ${e.message}`;
+    }
+  }
+
+  // Walk to the owner and drop items so they can pick them up.
+  async function giveToOwner(itemName, count) {
+    const owner = findOwner();
+    if (!owner) return "i can't see you to hand it over";
+    await bot.pathfinder.goto(new goals.GoalNear(owner.position.x, owner.position.y, owner.position.z, 2));
+    await bot.lookAt(owner.position.offset(0, 1, 0));
+
+    const items = bot.inventory.items();
+    if (!items.length) return "i've got nothing to give";
+
+    const wanted = String(itemName || 'all').toLowerCase().trim();
+    let tossed = 0;
+    if (wanted === 'all' || wanted === 'everything') {
+      for (const it of items) {
+        try { await bot.toss(it.type, null, it.count); tossed += it.count; } catch (e) { /* skip */ }
+      }
+    } else {
+      const names = resolveBlockNames(wanted);
+      for (const it of items.filter((i) => names.includes(i.name) || i.name === wanted)) {
+        const n = count ? Math.min(count, it.count) : it.count;
+        try { await bot.toss(it.type, null, n); tossed += n; } catch (e) { /* skip */ }
+      }
+    }
+    if (tossed === 0) return `i don't have any ${wanted}`;
+    return null;
   }
 
   return {
     findOwner,
+    inventorySummary,
     setMovements,
     followOwner,
     stop,
@@ -128,7 +235,11 @@ function makeSkills(bot, config, state) {
     collect,
     gotoCoord,
     attackNearest,
+    equipBestWeapon,
     defendTick,
+    eatTick,
+    craft,
+    giveToOwner,
     HOSTILES,
   };
 }

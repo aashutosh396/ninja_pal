@@ -4,9 +4,13 @@ An AI companion that joins your Minecraft world as a **real second player** (Min
 LLM brain). It shows up in the player list, has a body, and plays alongside you:
 
 - **follows** you, **comes** / **stops** on command
-- **defends** you — auto-attacks hostile mobs near you
+- **defends** you — auto-attacks hostile mobs near you, auto-equips its best weapon first
 - **gathers** blocks on request (`collect wood`, `mine iron`, …)
-- **chats** with you via the LLM, which can also trigger the actions above
+- **crafts** items (`craft oak_planks`, uses a nearby crafting table when needed)
+- **hands you loot** — walks over and drops items (`give wood`, `give all`)
+- **self-sustains** — auto-eats when hungry so it doesn't starve / heals via regen
+- **chats** with you via the LLM (with a real buddy personality), which also knows what it's
+  carrying and can trigger any action above
 
 > This is separate from the Fabric mod at the repo root (that one adds `/spawn`). The bot is a
 > standalone program you run next to Minecraft.
@@ -56,7 +60,9 @@ Edit `config.json`:
    come
    collect wood 3
    defend
-   what should we build?      ← free-form, goes to the LLM brain
+   craft me some planks       ← free-form, the brain picks the craft action
+   give me the wood
+   what should we build?      ← free-form chat
    ```
 
 ## How it works
@@ -75,9 +81,13 @@ bot/
 - Auto-defense runs on a 1 s loop independent of the LLM, so the pal reacts to mobs instantly.
 - Your API key lives only in `config.json`, which is gitignored — never committed.
 
-## Roadmap (next)
+## Roadmap
 
-- gather → **craft** → build simple structures
-- ranged combat + auto-eat / self-heal
-- multi-step tasks ("build a shelter", "strip-mine to bedrock")
-- longer memory of the world and your sessions
+Done: follow / come / stop · auto-defend + best-weapon · collect · **craft** · **give to owner**
+· **auto-eat / self-heal** · inventory-aware chat + buddy personality.
+
+Next:
+- build simple structures (place blocks: shelter, bridge, torch the area)
+- multi-step tasks ("get wood then craft tools", "strip-mine to bedrock")
+- ranged combat (bow) + smarter retreat when low health
+- longer memory across sessions
