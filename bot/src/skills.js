@@ -313,15 +313,32 @@ function makeSkills(bot, config, state) {
   async function doorTick() {
     if (doorBusy) return;
     // Open the nearest CLOSED door within reach so the doorway is passable (no moving-gate, since
-    // a stuck bot isn't "moving"). The pathfinder treats a closed door as a wall, so we open it.
+    // a stuck bot isn't "moving"). The pathfinder treats a closed door as a wall, so we open it
+    // AND step through (the existing path was computed while it was still a wall).
     const door = bot.findBlock({ matching: (b) => isDoorBlock(b) && !isDoorOpen(b), maxDistance: 4.5 });
     if (!door) return;
     doorBusy = true;
+    const goal = bot.pathfinder && bot.pathfinder.goal;
     try {
-      // face it and toggle it open
       await bot.lookAt(door.position.offset(0.5, 0.5, 0.5), true);
       await bot.activateBlock(door);
-    } catch (e) { /* */ } finally { doorBusy = false; }
+      // walk through: stop pathing, push forward past the doorway, then resume.
+      try { bot.pathfinder.setGoal(null); } catch (e) { /* */ }
+      const me = bot.entity.position;
+      const dp = door.position.offset(0.5, 0, 0.5);
+      const len = Math.hypot(dp.x - me.x, dp.z - me.z) || 1;
+      const tx = dp.x + ((dp.x - me.x) / len) * 1.6;
+      const tz = dp.z + ((dp.z - me.z) / len) * 1.6;
+      await bot.lookAt(new Vec3(tx, me.y + 1.5, tz), true);
+      bot.setControlState('forward', true);
+      await new Promise((r) => setTimeout(r, 1100));
+      bot.setControlState('forward', false);
+    } catch (e) {
+      try { bot.setControlState('forward', false); } catch (_) { /* */ }
+    } finally {
+      if (goal) { try { bot.pathfinder.setGoal(goal, true); } catch (e) { /* */ } } // resume through the open door
+      doorBusy = false;
+    }
   }
 
   // Auto-eat when hungry so the pal doesn't starve (and natural regen keeps health up).
