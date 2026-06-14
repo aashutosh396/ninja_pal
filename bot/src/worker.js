@@ -242,7 +242,8 @@ function createWorker(config, def, manager) {
     if (!memory.getSupply()) {
       await idleAtBase(); // get to base so we can see the local chests
       if (await skills.adoptSupplyChest()) {
-        bot.chat(`${name}: found a supply chest, i'll use it`);
+        const s = memory.getSupply();
+        bot.chat(`${name}: found a chest at ${s.x},${s.y},${s.z} — marking it as the crew supply chest`);
         summonSupplyHologram();
         return;
       }
