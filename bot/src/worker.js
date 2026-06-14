@@ -89,10 +89,24 @@ function createWorker(config, def, manager) {
     state.busy = true;
     state.cancel = false;
     try {
-      await runJob();
+      // When the bag is filling and a base is set, run loot to base (keep tools), then resume.
+      const base = memory.getBase();
+      if (base && bot.inventory.emptySlotCount() <= 6) {
+        await baseRun(base);
+      } else {
+        await runJob();
+      }
     } finally {
       state.busy = false;
     }
+  }
+
+  async function baseRun(base) {
+    state.goal = 'returning to base';
+    log('loot run -> base');
+    skills.tpTo(base.x, base.y, base.z);          // needs op; falls back to depositing wherever it lands
+    await new Promise((r) => setTimeout(r, 2000)); // let the tp + chunk load settle
+    await skills.depositLoot();                     // dump loot, keep tools
   }
 
   async function runJob() {
@@ -271,6 +285,7 @@ function createWorker(config, def, manager) {
     handle,
     disconnect,
     say: (msg) => { try { if (bot) bot.chat(msg); } catch (e) { /* */ } },
+    ownerPos: () => { try { const o = skills && skills.findOwner(); return o ? o.position : null; } catch (e) { return null; } },
     getState: () => state,
   };
 }

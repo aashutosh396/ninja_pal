@@ -361,6 +361,42 @@ function makeSkills(bot, config, state) {
     return tossed ? null : `couldn't drop ${wanted}`;
   }
 
+  // Gear the worker should NEVER deposit on a loot run (so it can keep working).
+  function isGear(name, mcData) {
+    if (/_(pickaxe|axe|sword|shovel|hoe)$/.test(name)) return true;
+    if (['bucket', 'water_bucket', 'lava_bucket', 'bow', 'crossbow', 'arrow', 'shield',
+      'flint_and_steel', 'torch', 'crafting_table', 'furnace', 'shears'].includes(name)) return true;
+    if (mcData.foodsByName && mcData.foodsByName[name]) return true;
+    return false;
+  }
+
+  // Teleport to a coordinate via server command (needs cheats + the worker /op'd).
+  function tpTo(x, y, z) {
+    bot.chat(`/tp ${bot.username} ${Math.round(x)} ${Math.round(y)} ${Math.round(z)}`);
+    return null;
+  }
+
+  // Dump LOOT into the nearest chest but keep tools/weapons/food so the worker can keep going.
+  async function depositLoot() {
+    const mcData = require('minecraft-data')(bot.version);
+    const chestIds = ['chest', 'trapped_chest', 'barrel']
+      .map((n) => mcData.blocksByName[n] && mcData.blocksByName[n].id)
+      .filter((x) => x != null);
+    const chestBlock = bot.findBlock({ matching: chestIds, maxDistance: 16 });
+    if (!chestBlock) return 'no chest at base';
+    try {
+      await bot.pathfinder.goto(new goals.GoalGetToBlock(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z));
+    } catch (e) { /* try anyway */ }
+    let chest;
+    try { chest = await bot.openContainer(chestBlock); } catch (e) { return "couldn't open base chest"; }
+    for (const it of bot.inventory.items()) {
+      if (isGear(it.name, mcData)) continue;
+      try { await chest.deposit(it.type, null, it.count); } catch (e) { /* full/mismatch */ }
+    }
+    try { chest.close(); } catch (e) { /* */ }
+    return null;
+  }
+
   // Deposit items into the nearest chest/barrel.
   async function depositToChest(itemName, count) {
     const mcData = require('minecraft-data')(bot.version);
@@ -896,6 +932,8 @@ function makeSkills(bot, config, state) {
     wander,
     drop,
     depositToChest,
+    depositLoot,
+    tpTo,
     farm,
     tpToOwner,
     tpOwnerHere,

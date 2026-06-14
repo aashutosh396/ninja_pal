@@ -10,9 +10,9 @@ const FILE = path.join(__dirname, '..', 'memory.json');
 function load() {
   try {
     const m = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    return { notes: Array.isArray(m.notes) ? m.notes : [], home: m.home || null };
+    return { notes: Array.isArray(m.notes) ? m.notes : [], home: m.home || null, base: m.base || null };
   } catch (e) {
-    return { notes: [], home: null };
+    return { notes: [], home: null, base: null };
   }
 }
 
@@ -42,6 +42,16 @@ function getHome() {
   return mem.home;
 }
 
+// Shared crew base/depot (where the chests are). Workers do loot runs here.
+function setBase(pos) {
+  mem.base = { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) };
+  save();
+}
+
+function getBase() {
+  return mem.base;
+}
+
 function summary() {
   const parts = [];
   if (mem.home) parts.push(`home=(${mem.home.x},${mem.home.y},${mem.home.z})`);
@@ -49,4 +59,4 @@ function summary() {
   return parts.join(' | ') || 'nothing remembered yet';
 }
 
-module.exports = { add, setHome, getHome, summary, all: () => mem };
+module.exports = { add, setHome, getHome, setBase, getBase, summary, all: () => mem };

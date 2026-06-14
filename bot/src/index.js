@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const { createWorker } = require('./worker');
 const { rolesList, isPreset } = require('./roles');
+const memory = require('./memory');
 
 const cfgPath = path.join(__dirname, '..', 'config.json');
 if (!fs.existsSync(cfgPath)) {
@@ -86,6 +87,14 @@ function route(m, fallback) {
     return;
   }
 
+  // --- base / depot (workers do loot runs here) ---
+  if (/^(set base|set spawn|base here|set depot)\b/.test(lm)) { setBaseAtOwner(); return; }
+  if (/^(base|where('?s| is)? (the )?base|depot)\b/.test(lm)) {
+    const b = memory.getBase();
+    say(b ? `base at ${b.x},${b.y},${b.z} — workers bring loot here when full` : 'no base set — stand by your chest and say "set base"');
+    return;
+  }
+
   // --- crew-wide: "all <command>" ---
   if ((mm = m.match(/^all\s+(.+)/i))) {
     for (const w of workers.values()) w.handle(mm[1]);
@@ -115,6 +124,19 @@ function onChat(username, message) {
 function onWhisper(username, message, selfName) {
   if (config.owner && username !== config.owner) return;
   route(String(message).trim(), workers.get(selfName.toLowerCase()));
+}
+
+// Set the crew base at the owner's current spot (asks any worker that can see the owner).
+function setBaseAtOwner() {
+  for (const w of workers.values()) {
+    const p = w.ownerPos && w.ownerPos();
+    if (p) {
+      memory.setBase(p);
+      say(`base set at ${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)} — i'll bring loot here when full (put a chest there!)`);
+      return;
+    }
+  }
+  say("can't see you to set the base — get near a worker and try again");
 }
 
 function createWorkerCmd(rawName, jobStr) {
