@@ -180,7 +180,8 @@ function setBaseAtOwner() {
   if (!p) { say("can't see you to set the base — get near a worker and try again"); return; }
   memory.setBase(p);
   const b = memory.getBase();
-  say(`base set at ${b.x},${b.y},${b.z} — put chests there (sign a chest "supply", others "deposit"/"iron"/etc). i'll walk loot here when full`);
+  say(`/setblock ${b.x} ${b.y - 1} ${b.z} minecraft:emerald_block`); // emerald marker under the base (needs op)
+  say(`base set at ${b.x},${b.y},${b.z} — marked with an emerald block. put a deposit chest here`);
 }
 
 // Supply chest = where workers TAKE tools/food; loot is never deposited here.
@@ -189,7 +190,9 @@ function setSupplyAtOwner() {
   if (!p) { say("can't see you to set the supply chest — get near a worker"); return; }
   memory.setSupply(p);
   const s = memory.getSupply();
-  say(`supply chest set at ${s.x},${s.y},${s.z} — workers take tools/food here and won't dump loot here`);
+  // Place a sign labeled "Supply" at the spot (needs op). Front-text format works on 1.20+/1.21+.
+  say(`/setblock ${s.x} ${s.y} ${s.z} minecraft:oak_sign{front_text:{messages:['"Supply"','""','""','""']}}`);
+  say(`supply chest set at ${s.x},${s.y},${s.z} — labeled "Supply". workers take tools/food here, never dump loot here`);
 }
 
 // Spawn = the world spawn point (separate from base). Needs a worker op'd.
