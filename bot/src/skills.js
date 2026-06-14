@@ -134,9 +134,23 @@ function makeSkills(bot, config, state) {
   }
 
   function setMovements() {
+    const mcData = require('minecraft-data')(bot.version);
     const m = new Movements(bot);
     m.allowSprinting = true;
     m.canDig = true;
+    // Strongly prefer walking / using doors over tunneling through walls. It will still dig as a
+    // LAST resort (no other path), but won't smash through a base to take a shortcut.
+    m.digCost = 100;
+    m.placeCost = 50; // also avoid scaffolding through/over the base
+    // NEVER break doors / trapdoors / fence gates — go through or around them.
+    try {
+      for (const n of Object.keys(mcData.blocksByName)) {
+        if (/_door$|_trapdoor$|_fence_gate$/.test(n)) {
+          const id = mcData.blocksByName[n].id;
+          if (m.blocksCantBreak && id != null) m.blocksCantBreak.add(id);
+        }
+      }
+    } catch (e) { /* older mineflayer without blocksCantBreak */ }
     bot.pathfinder.setMovements(m);
   }
 
