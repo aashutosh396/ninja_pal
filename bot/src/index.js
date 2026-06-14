@@ -30,6 +30,7 @@ const state = {
   busy: false, // a task is currently running (lock so auto + manual don't collide)
   quiet: false, // suppress chat for routine autonomy work (still logs to console)
   cancel: false, // cooperative cancel — set by interrupt commands to stop the current task
+  goal: 'idle', // current autonomy goal label (for the "status" command)
 };
 const history = []; // recent chat turns fed back to the LLM for short-term memory
 
@@ -100,6 +101,7 @@ bot.once('spawn', () => {
     autonomy
       .step()
       .then((what) => {
+        state.goal = what || state.goal;
         if (what !== autoLastGoal) {
           autoLastGoal = what;
           if (what) console.log('[Ninja Pal] auto:', what); // log only when the goal changes
@@ -132,6 +134,18 @@ bot.on('whisper', onMessage);   // /msg, /tell, /w to the pal
 async function handle(message) {
   if (!skills) return;
   const m = message.toLowerCase().trim();
+
+  // --- STATUS: report what it's doing (read-only, never blocked) ---
+  if (/^(status|what are you doing|wyd|what'?s your goal|whatcha doing|sup)$/.test(m)) {
+    const where = state.autonomous
+      ? `working on my own (${state.goal})`
+      : (state.mode === 'follow' ? 'following you' : 'waiting for orders');
+    const p = bot.entity.position;
+    bot.chat(`${where} | hp ${Math.round(bot.health)} food ${Math.round(bot.food)} | at ${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`);
+    const inv = skills.inventorySummary();
+    bot.chat(`carrying: ${inv.length > 120 ? inv.slice(0, 120) + '…' : inv}`);
+    return;
+  }
 
   // --- INTERRUPT commands: always run instantly, even mid-task (they cancel the current job) ---
   // interrupt() cancels any running task + stops movement so the command takes over immediately.
@@ -205,6 +219,7 @@ async function handle(message) {
 async function execute(action) {
   if (!action || !action.name) return null;
   const a = action.args || {};
+  state.goal = action.name + (a.block || a.ore || a.item || a.what ? ` ${a.block || a.ore || a.item || a.what}` : '');
   console.log('[Ninja Pal] action:', action.name, JSON.stringify(a));
   switch (action.name) {
     case 'follow': return skills.followOwner();
