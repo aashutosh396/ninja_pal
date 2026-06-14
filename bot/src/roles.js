@@ -11,6 +11,8 @@ const PRESETS = {
   miner_stone: 'mine stone and put it in the nearest chest',
   hunter: 'hunt animals for food',
   farmer: 'harvest ripe crops and replant them',
+  logistics: 'keep the supply chest stocked with tools + food and keep the crew working',
+  foreman: 'keep the supply chest stocked with tools + food and keep the crew working',
   survivor: 'survive on your own — wood, tools, food, a house',
   idle: 'wait for orders',
 };
@@ -40,6 +42,7 @@ const RES = {
 function interpret(job) {
   const j = String(job || '').toLowerCase();
   if (!j.trim() || /\bidle|wait\b/.test(j)) return { kind: 'idle' };
+  if (/\b(logistics|foreman|quartermaster|coordinator|manage the crew|keep.*(supply|stocked)|stock the supply|supply (run|runner|manager))\b/.test(j)) return { kind: 'logistics' };
   if (/\b(guard|protect|defend|follow|escort|bodyguard)\b/.test(j)) return { kind: 'guard' };
   if (/\b(farm|farmer|crops?|harvest|replant|wheat|carrots?|potatoes?|beetroots?)\b/.test(j)) return { kind: 'farm' };
   if (/\b(hunt|hunting|kill animals|get food|find food)\b/.test(j)) return { kind: 'hunt' };

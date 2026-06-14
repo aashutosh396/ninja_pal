@@ -644,12 +644,14 @@ function makeSkills(bot, config, state) {
       const c = scanChests(24).find((c2) => /supply|tools|gear|items/.test(c2.label));
       if (c) supplyBlock = bot.blockAt(c.pos);
     }
-    if (!supplyBlock) return false;
+    if (!supplyBlock) return false; // no supply chest at all
     const mcData = require('minecraft-data')(bot.version);
     const countMine = (match) => bot.inventory.items().filter(match).reduce((a, b) => a + b.count, 0);
+    const snap = () => { const m = {}; for (const it of bot.inventory.items()) m[it.name] = (m[it.name] || 0) + it.count; return m; };
     try {
       await bot.pathfinder.goto(new goals.GoalGetToBlock(supplyBlock.position.x, supplyBlock.position.y, supplyBlock.position.z));
       const chest = await bot.openContainer(supplyBlock);
+      const before = snap();
 
       // take up to `target` of items matching `match` (works on both inventory + chest items via .name)
       const take = async (match, target) => {
@@ -673,8 +675,92 @@ function makeSkills(bot, config, state) {
       await take((i) => i.name === 'torch', 16);
 
       try { chest.close(); } catch (e) { /* */ }
+
+      // Report exactly what was withdrawn.
+      const after = snap();
+      const got = [];
+      for (const n of Object.keys(after)) {
+        const d = after[n] - (before[n] || 0);
+        if (d > 0) got.push(`${d} ${n}`);
+      }
+      return got.length ? got.join(', ') : ''; // '' = took nothing (already stocked)
     } catch (e) { return false; }
-    return true;
+  }
+
+  // Locate the supply chest block (saved position first, else a sign-labeled one).
+  function supplyChestBlock() {
+    const s = memory.getSupply();
+    if (s) { const b = chestBlockNear(new Vec3(s.x, s.y, s.z)); if (b) return b; }
+    const c = scanChests(24).find((c2) => /supply|tools|gear|items/.test(c2.label));
+    return c ? bot.blockAt(c.pos) : null;
+  }
+
+  // How many tools + food are sitting in the supply chest (for the logistics worker).
+  async function supplyCounts() {
+    const block = supplyChestBlock();
+    if (!block) return null;
+    const mcData = require('minecraft-data')(bot.version);
+    try {
+      await bot.pathfinder.goto(new goals.GoalGetToBlock(block.position.x, block.position.y, block.position.z));
+      const chest = await bot.openContainer(block);
+      let tools = 0;
+      let food = 0;
+      for (const it of chest.containerItems()) {
+        if (/_(pickaxe|axe|sword|shovel|hoe)$/.test(it.name)) tools += it.count;
+        else if (mcData.foodsByName && mcData.foodsByName[it.name]) food += it.count;
+      }
+      try { chest.close(); } catch (e) { /* */ }
+      return { tools, food };
+    } catch (e) { return null; }
+  }
+
+  // Put surplus tools + food from inventory INTO the supply chest (keep a little for self).
+  async function stockSupply() {
+    const block = supplyChestBlock();
+    if (!block) return 'no supply chest set';
+    const mcData = require('minecraft-data')(bot.version);
+    try {
+      await bot.pathfinder.goto(new goals.GoalGetToBlock(block.position.x, block.position.y, block.position.z));
+      const chest = await bot.openContainer(block);
+      const keep = { pickaxe: 1, axe: 1 };
+      let foodKeep = FOOD_RESERVE;
+      for (const it of bot.inventory.items()) {
+        const kind = (it.name.match(/_(pickaxe|axe|sword|shovel|hoe)$/) || [])[1];
+        if (kind) {
+          const k = keep[kind] || 0; keep[kind] = 0;
+          if (it.count - k > 0) { try { await chest.deposit(it.type, null, it.count - k); } catch (e) { /* */ } }
+        } else if (mcData.foodsByName && mcData.foodsByName[it.name]) {
+          const k = Math.min(it.count, foodKeep); foodKeep -= k;
+          if (it.count - k > 0) { try { await chest.deposit(it.type, null, it.count - k); } catch (e) { /* */ } }
+        }
+      }
+      try { chest.close(); } catch (e) { /* */ }
+      return null;
+    } catch (e) { return 'couldnt reach supply chest'; }
+  }
+
+  // Forge a stone tool set (gathers wood + stone as needed); the tools stay on the worker.
+  async function makeToolset() {
+    const countName = (n) => bot.inventory.items().filter((i) => i.name === n).reduce((a, b) => a + b.count, 0);
+    if (countLogs() < 2 && !bot.inventory.items().some((i) => i.name.endsWith('_planks'))) {
+      const e = await collect('wood', 3);
+      if (e) return e;
+    }
+    await craftPlanksFromLogs();
+    await craft('crafting_table', 1);
+    const t = await placeCraftingTable();
+    if (t) return t;
+    await craft('stick', 2);
+    await craftPlanksFromLogs();
+    if (countName('cobblestone') < 16) await mineOre('stone', 16);
+    await craft('stick', 1);
+    const made = [];
+    for (const tool of ['stone_pickaxe', 'stone_axe', 'stone_sword', 'stone_shovel', 'stone_hoe']) {
+      if (state.cancel) break;
+      const e = await craft(tool, 1);
+      if (!e) made.push(tool.replace('stone_', ''));
+    }
+    return made.length ? null : 'need wood + stone to make tools';
   }
 
   // A short summary of the gear/supplies the worker is carrying (for status).
@@ -1158,6 +1244,9 @@ function makeSkills(bot, config, state) {
     depositIntoChestAt,
     chestBlockNear,
     restockFromSupply,
+    supplyCounts,
+    stockSupply,
+    makeToolset,
     gearSummary,
     scanChests,
     tpTo,

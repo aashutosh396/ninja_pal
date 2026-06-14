@@ -27,6 +27,7 @@ function createWorker(config, def, manager) {
   let gatherFails = 0;
   let stopped = false;        // set when dismissed — prevents auto-reconnect
   const timers = [];          // interval ids so we can stop cleanly
+  let lastNudge = 0;          // throttle the logistics "supplies ready" announce
 
   const log = (...a) => console.log(`[${name}]`, ...a);
   const RESOURCE_WORDS = ['dirt', 'cobblestone', 'stone', 'wood', 'logs', 'log', 'coal', 'iron', 'gold', 'diamond', 'sand', 'planks'];
@@ -135,8 +136,10 @@ function createWorker(config, def, manager) {
       state.goal = 'getting supplies';
       try { await bot.pathfinder.goto(new goals.GoalNear(spot.x, spot.y, spot.z, 2)); }
       catch (e) { skills.tpTo(spot.x, spot.y, spot.z); await new Promise((r) => setTimeout(r, 1500)); }
-      const ok = await skills.restockFromSupply();
-      bot.chat(`${name}: ${ok ? 'grabbed supplies' : 'no supply chest found at base'}`);
+      const got = await skills.restockFromSupply();
+      if (got === false) bot.chat(`${name}: no supply chest set — say "set supply" at it`);
+      else if (!got) bot.chat(`${name}: already stocked, took nothing`);
+      else { bot.chat(`${name}: grabbed ${got} from supply`); log('restock:', got); }
     } finally { state.busy = false; }
   }
 
@@ -150,7 +153,8 @@ function createWorker(config, def, manager) {
       skills.tpTo(spot.x, spot.y, spot.z);
       await new Promise((r) => setTimeout(r, 1800));
     }
-    await skills.restockFromSupply();               // grab tools from the supply chest if missing
+    const got = await skills.restockFromSupply(); // grab tools/food from the supply chest if missing
+    if (got && got !== true) { bot.chat(`${name}: took ${got} from supply`); log('restock:', got); }
 
     // If a chest is assigned, deposit into THAT exact chest.
     if (def.chest) {
@@ -199,10 +203,43 @@ function createWorker(config, def, manager) {
       case 'survive':
         await autonomy.step();
         return;
+      case 'logistics':
+        return runLogistics();
       case 'gather':
         return runGather(plan);
       default:
         return runLlmJob();
+    }
+  }
+
+  // Logistics/foreman: keep the supply chest stocked with tools + food, and keep the crew working.
+  async function runLogistics() {
+    if (!memory.getSupply()) {
+      if (Date.now() - lastNudge > 60000) { lastNudge = Date.now(); bot.chat(`${name}: set a supply chest first — stand at it and say "set supply"`); }
+      return;
+    }
+    const counts = await skills.supplyCounts();
+    if (counts && counts.tools < 6) {
+      state.goal = 'forging tools for supply';
+      await skills.makeToolset();
+      await skills.stockSupply();
+      bot.chat(`${name}: restocked tools in the supply chest`);
+      return;
+    }
+    if (counts && counts.food < 24) {
+      state.goal = 'getting food for supply';
+      const e = await skills.hunt();
+      await skills.stockSupply();
+      if (e) await skills.wander();
+      else bot.chat(`${name}: added food to the supply chest`);
+      return;
+    }
+    // Everything stocked -> keep the crew working + tell them supplies are ready (throttled).
+    state.goal = 'running logistics';
+    if (Date.now() - lastNudge > 60000) {
+      lastNudge = Date.now();
+      if (manager.tellAll) manager.tellAll('work');
+      bot.chat(`${name}: supplies are stocked — crew, grab tools/food anytime, back to work!`);
     }
   }
 

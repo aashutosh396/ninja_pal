@@ -42,7 +42,12 @@ function saveDefs() {
   try { fs.writeFileSync(WORKERS_FILE, JSON.stringify(defs, null, 2)); } catch (e) { /* */ }
 }
 
-const manager = { onChat, onWhisper, persist: () => saveDefs() };
+const manager = {
+  onChat,
+  onWhisper,
+  persist: () => saveDefs(),
+  tellAll: (cmd) => { for (const w of workers.values()) w.handle(cmd); },
+};
 
 function spawnWorker(def) {
   workers.set(def.name.toLowerCase(), createWorker(config, def, manager));
