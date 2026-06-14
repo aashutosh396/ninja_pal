@@ -174,6 +174,16 @@ function ownerSpot() {
   return null;
 }
 
+// Owner position + the chest block next to them (if any), via a worker that can see them.
+function ownerChestInfo() {
+  for (const w of workers.values()) {
+    const p = w.ownerPos && w.ownerPos();
+    if (!p) continue;
+    return { owner: p, chest: w.chestNear ? w.chestNear(p) : null };
+  }
+  return null;
+}
+
 // Base/depot = where workers bring loot (does NOT touch world spawn).
 function setBaseAtOwner() {
   const p = ownerSpot();
@@ -182,20 +192,24 @@ function setBaseAtOwner() {
   const b = memory.getBase();
   say(`/setblock ${b.x} ${b.y - 1} ${b.z} minecraft:emerald_block`); // emerald marker under the base
   say(`/kill @e[type=minecraft:text_display,tag=npbase]`);            // clear any old base hologram
-  say(`/summon minecraft:text_display ${b.x + 0.5} ${b.y + 1.4} ${b.z + 0.5} {text:'"Base"',billboard:"center",Tags:["npbase"]}`);
-  say(`base set at ${b.x},${b.y},${b.z} — emerald block + a floating "Base" label`);
+  // sit just above the emerald block, light-green text
+  say(`/summon minecraft:text_display ${b.x + 0.5} ${b.y + 0.6} ${b.z + 0.5} {text:'{"text":"Base","color":"green"}',billboard:"center",Tags:["npbase"]}`);
+  say(`base set at ${b.x},${b.y},${b.z} — emerald block + a floating green "Base" label`);
 }
 
 // Supply chest = where workers TAKE tools/food; loot is never deposited here.
 function setSupplyAtOwner() {
-  const p = ownerSpot();
-  if (!p) { say("can't see you to set the supply chest — get near a worker"); return; }
-  memory.setSupply(p);
+  const info = ownerChestInfo();
+  if (!info) { say("can't see you to set the supply chest — get near a worker"); return; }
+  // Anchor to the actual chest block if there's one beside you, else where you stood.
+  const spot = info.chest || info.owner;
+  memory.setSupply(spot);
   const s = memory.getSupply();
-  // Float a "Supply" hologram over the chest (text_display entity; needs op).
+  // Hologram sits just above the chest top (chest block y + ~1.2), light-green text.
+  const hy = (info.chest ? info.chest.y + 1.2 : s.y + 0.3);
   say(`/kill @e[type=minecraft:text_display,tag=npsupply]`);
-  say(`/summon minecraft:text_display ${s.x + 0.5} ${s.y + 1.4} ${s.z + 0.5} {text:'"Supply"',billboard:"center",Tags:["npsupply"]}`);
-  say(`supply chest set at ${s.x},${s.y},${s.z} — floating "Supply" label. workers take tools/food here, never dump loot here`);
+  say(`/summon minecraft:text_display ${s.x + 0.5} ${hy} ${s.z + 0.5} {text:'{"text":"Supply","color":"green"}',billboard:"center",Tags:["npsupply"]}`);
+  say(`supply chest set at ${s.x},${s.y},${s.z} — floating green "Supply" label just above it`);
 }
 
 // Spawn = the world spawn point (separate from base). Needs a worker op'd.

@@ -452,6 +452,7 @@ function createWorker(config, def, manager) {
     disconnect,
     say: (msg) => { try { if (bot) bot.chat(msg); } catch (e) { /* */ } },
     ownerPos: () => { try { const o = skills && skills.findOwner(); return o ? o.position : null; } catch (e) { return null; } },
+    chestNear: (pos) => { try { const b = skills && skills.chestBlockNear(pos); return b ? b.position : null; } catch (e) { return null; } },
     getState: () => state,
   };
 }
