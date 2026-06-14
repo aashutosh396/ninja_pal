@@ -29,9 +29,9 @@ function setWorld(id) {
 function load() {
   try {
     const m = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    return { notes: Array.isArray(m.notes) ? m.notes : [], home: m.home || null, base: m.base || null, spawn: m.spawn || null, supply: m.supply || null };
+    return { notes: Array.isArray(m.notes) ? m.notes : [], home: m.home || null, base: m.base || null, spawn: m.spawn || null, supply: m.supply || null, walled: !!m.walled };
   } catch (e) {
-    return { notes: [], home: null, base: null, spawn: null, supply: null };
+    return { notes: [], home: null, base: null, spawn: null, supply: null, walled: false };
   }
 }
 
@@ -64,8 +64,12 @@ function getHome() {
 // Shared crew base/depot (where the chests are). Workers do loot runs here.
 function setBase(pos) {
   mem.base = { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) };
+  mem.walled = false; // new base -> needs a new wall
   save();
 }
+
+function setWalled(v) { mem.walled = !!v; save(); }
+function getWalled() { return mem.walled; }
 
 function getBase() {
   return mem.base;
@@ -90,7 +94,7 @@ function getSupply() {
   return mem.supply;
 }
 
-function clearBase() { mem.base = null; save(); }
+function clearBase() { mem.base = null; mem.walled = false; save(); }
 function clearSupply() { mem.supply = null; save(); }
 
 function summary() {
@@ -100,4 +104,4 @@ function summary() {
   return parts.join(' | ') || 'nothing remembered yet';
 }
 
-module.exports = { add, setHome, getHome, setBase, getBase, clearBase, setSpawn, getSpawn, setSupply, getSupply, clearSupply, setWorld, summary, all: () => mem };
+module.exports = { add, setHome, getHome, setBase, getBase, clearBase, setWalled, getWalled, setSpawn, getSpawn, setSupply, getSupply, clearSupply, setWorld, summary, all: () => mem };

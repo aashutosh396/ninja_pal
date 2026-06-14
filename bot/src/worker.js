@@ -281,6 +281,15 @@ function createWorker(config, def, manager) {
       return;
     }
 
+    // --- protect the base: build an enclosing wall + door, once ---
+    if (!memory.getWalled()) {
+      state.goal = 'building the base wall';
+      const e = await skills.buildWall(6, 5);
+      if (!e) { memory.setWalled(true); bot.chat(`${name}: base walled off with a door`); }
+      else if (Date.now() - lastNudge > 30000) { lastNudge = Date.now(); bot.chat(`${name}: ${e}`); }
+      return;
+    }
+
     // Throttle the (expensive) supply-chest read; reuse the cached counts in between.
     let counts = cachedSupply;
     if (!counts || Date.now() - lastSupplyCheck > 20000) {

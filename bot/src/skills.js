@@ -934,6 +934,53 @@ function makeSkills(bot, config, state) {
     return planted ? null : 'couldnt plant saplings';
   }
 
+  // Build a protective wall around the base: a perimeter at `radius` from the base, `height` tall,
+  // with a doorway + a door. Gathers blocks as it goes. Slow + best-effort. Returns null when done.
+  async function buildWall(radius = 6, height = 5) {
+    const base = memory.getBase();
+    if (!base) return 'no base';
+    const cx = base.x; const cy = base.y; const cz = base.z;
+
+    // perimeter cells, bottom-up, with a 2-tall doorway on the -z side at x = cx.
+    const targets = [];
+    for (let y = 0; y < height; y++) {
+      for (let x = -radius; x <= radius; x++) {
+        for (let z = -radius; z <= radius; z++) {
+          if (Math.abs(x) !== radius && Math.abs(z) !== radius) continue; // perimeter only
+          if (x === 0 && z === -radius && (y === 0 || y === 1)) continue; // doorway
+          targets.push(new Vec3(cx + x, cy + y, cz + z));
+        }
+      }
+    }
+
+    say('walling off the base (this takes a while)');
+    let placed = 0; let failed = 0; let gatherTries = 0;
+    for (const pos of targets) {
+      if (state.cancel) return null;
+      if (!placeableItem(BUILD_BLOCKS)) {
+        if (gatherTries++ > 25) break;
+        await mineOre('stone', 16);
+        if (!placeableItem(BUILD_BLOCKS)) await collect('dirt', 16);
+        if (!placeableItem(BUILD_BLOCKS)) break; // can't get blocks here
+      }
+      const e = await placeBlockAt(pos);
+      if (e) failed++; else placed++;
+    }
+
+    // a door in the doorway
+    try {
+      if (!bot.inventory.items().some((i) => i.name.endsWith('_door'))) {
+        await ensureCraftingTable();
+        await craftPlanksFromLogs();
+        await craft('oak_door', 1);
+      }
+      await placeItemAt('oak_door', new Vec3(cx, cy, cz - radius));
+    } catch (e) { /* no door, leave the gap */ }
+
+    say(`base walled — ${placed} blocks${failed ? `, missed ${failed}` : ''}`);
+    return null;
+  }
+
   // Place a specific item (e.g. a chest) at a world position, pathing into reach first.
   async function placeItemAt(itemName, pos) {
     const have = () => bot.inventory.items().find((i) => i.name === itemName);
@@ -1515,6 +1562,7 @@ function makeSkills(bot, config, state) {
     placeItemAt,
     buildSupplyChest,
     adoptSupplyChest,
+    buildWall,
     ensureTool,
     plantTrees,
     gearSummary,
