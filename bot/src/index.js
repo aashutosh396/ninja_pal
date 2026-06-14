@@ -87,8 +87,14 @@ function route(m, fallback) {
     return;
   }
 
-  // --- base / depot (workers do loot runs here) ---
-  if (/^(set base|set spawn|base here|set depot)\b/.test(lm)) { setBaseAtOwner(); return; }
+  // --- base / spawn / op ---
+  if (/^(set base|base here|set depot)\b/.test(lm)) { setBaseAtOwner(); return; }
+  if (/^(set spawn|spawn here|set world ?spawn)\b/.test(lm)) { setSpawnAtOwner(); return; }
+  if ((mm = lm.match(/^set op\s+(\S+)/))) {
+    say(`/op ${mm[1]}`);
+    say(`tried to op ${mm[1]} — only works if i'm already an operator`);
+    return;
+  }
   if (/^(base|where('?s| is)? (the )?base|depot)\b/.test(lm)) {
     const b = memory.getBase();
     say(b ? `base at ${b.x},${b.y},${b.z} — workers bring loot here when full` : 'no base set — stand by your chest and say "set base"');
@@ -126,19 +132,32 @@ function onWhisper(username, message, selfName) {
   route(String(message).trim(), workers.get(selfName.toLowerCase()));
 }
 
-// Set the crew base at the owner's current spot (asks any worker that can see the owner).
-function setBaseAtOwner() {
+// The owner's current position, from any worker that can see them.
+function ownerSpot() {
   for (const w of workers.values()) {
     const p = w.ownerPos && w.ownerPos();
-    if (p) {
-      memory.setBase(p);
-      const b = memory.getBase();
-      say(`/setworldspawn ${b.x} ${b.y} ${b.z}`); // also set the world spawn here (needs me op'd)
-      say(`base + world spawn set at ${b.x},${b.y},${b.z} — i'll bring loot here when full (put a chest there!)`);
-      return;
-    }
+    if (p) return p;
   }
-  say("can't see you to set the base — get near a worker and try again");
+  return null;
+}
+
+// Base/depot = where workers bring loot (does NOT touch world spawn).
+function setBaseAtOwner() {
+  const p = ownerSpot();
+  if (!p) { say("can't see you to set the base — get near a worker and try again"); return; }
+  memory.setBase(p);
+  const b = memory.getBase();
+  say(`base set at ${b.x},${b.y},${b.z} — put chests there (sign a chest "supply", others "deposit"/"iron"/etc). i'll walk loot here when full`);
+}
+
+// Spawn = the world spawn point (separate from base). Needs a worker op'd.
+function setSpawnAtOwner() {
+  const p = ownerSpot();
+  if (!p) { say("can't see you to set spawn — get near a worker and try again"); return; }
+  memory.setSpawn(p);
+  const s = memory.getSpawn();
+  say(`/setworldspawn ${s.x} ${s.y} ${s.z}`);
+  say(`world spawn set at ${s.x},${s.y},${s.z} (needs me op'd)`);
 }
 
 function createWorkerCmd(rawName, jobStr) {

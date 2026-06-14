@@ -52,6 +52,15 @@ function getBase() {
   return mem.base;
 }
 
+function setSpawn(pos) {
+  mem.spawn = { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) };
+  save();
+}
+
+function getSpawn() {
+  return mem.spawn;
+}
+
 function summary() {
   const parts = [];
   if (mem.home) parts.push(`home=(${mem.home.x},${mem.home.y},${mem.home.z})`);
@@ -59,4 +68,4 @@ function summary() {
   return parts.join(' | ') || 'nothing remembered yet';
 }
 
-module.exports = { add, setHome, getHome, setBase, getBase, summary, all: () => mem };
+module.exports = { add, setHome, getHome, setBase, getBase, setSpawn, getSpawn, summary, all: () => mem };

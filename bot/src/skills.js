@@ -468,6 +468,112 @@ function makeSkills(bot, config, state) {
     return harvested ? null : 'no ripe crops to harvest';
   }
 
+  // ---- labeled chests (signs) -----------------------------------------------
+
+  // Read a sign's text (front+back), lowercased. Best-effort across MC versions.
+  function readSign(b) {
+    if (!b) return '';
+    try {
+      if (typeof b.getSignText === 'function') {
+        const t = b.getSignText();
+        return (Array.isArray(t) ? t.join(' ') : String(t || '')).toLowerCase();
+      }
+    } catch (e) { /* */ }
+    if (b.signText) return String(b.signText).toLowerCase();
+    return '';
+  }
+
+  // Coarse resource label for matching chest signs.
+  function resourceOf(name) {
+    if (name.endsWith('_log') || name.endsWith('_planks')) return 'wood';
+    if (name.includes('iron')) return 'iron';
+    if (name.includes('gold')) return 'gold';
+    if (name.includes('diamond')) return 'diamond';
+    if (name.includes('coal')) return 'coal';
+    if (name === 'cobblestone' || name === 'stone' || name.includes('deepslate')) return 'stone';
+    if (name === 'dirt' || name === 'grass_block') return 'dirt';
+    if (name === 'sand') return 'sand';
+    return name;
+  }
+
+  // Find chests near a point and read the sign labeling each (sign on/above/beside the chest).
+  function scanChests(maxDistance = 24) {
+    const mcData = require('minecraft-data')(bot.version);
+    const chestIds = ['chest', 'trapped_chest', 'barrel']
+      .map((n) => mcData.blocksByName[n] && mcData.blocksByName[n].id)
+      .filter((x) => x != null);
+    const positions = bot.findBlocks({ matching: chestIds, maxDistance, count: 24 });
+    const around = [[0, 1, 0], [0, 2, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1]];
+    return positions.map((pos) => {
+      let label = '';
+      for (const d of around) {
+        const b = bot.blockAt(pos.offset(d[0], d[1], d[2]));
+        if (b && b.name.includes('sign')) { const t = readSign(b).trim(); if (t) { label = t; break; } }
+      }
+      return { pos, label };
+    });
+  }
+
+  // Deposit loot, routing each resource to its labeled chest; keeps tools/weapons/food.
+  async function depositLabeled() {
+    const mcData = require('minecraft-data')(bot.version);
+    const chests = scanChests(24);
+    if (!chests.length) return 'no chests at base';
+    const supply = chests.find((c) => /supply|tools|gear|items/.test(c.label));
+    const drops = chests.filter((c) => c !== supply);
+    if (!drops.length) return 'no deposit chest at base';
+
+    const groups = new Map();
+    for (const it of bot.inventory.items()) {
+      if (isGear(it.name, mcData)) continue;
+      const res = resourceOf(it.name);
+      const target =
+        drops.find((c) => c.label && (c.label.includes(res) || res.includes(c.label))) ||
+        drops.find((c) => /deposit|loot|drop|store|misc|junk/.test(c.label)) ||
+        drops.find((c) => !c.label) ||
+        drops[0];
+      const k = `${target.pos.x},${target.pos.y},${target.pos.z}`;
+      if (!groups.has(k)) groups.set(k, { pos: target.pos, items: [] });
+      groups.get(k).items.push(it);
+    }
+    for (const g of groups.values()) {
+      if (state.cancel) break;
+      try {
+        await bot.pathfinder.goto(new goals.GoalGetToBlock(g.pos.x, g.pos.y, g.pos.z));
+        const chest = await bot.openContainer(bot.blockAt(g.pos));
+        for (const it of g.items) { try { await chest.deposit(it.type, null, it.count); } catch (e) { /* */ } }
+        try { chest.close(); } catch (e) { /* */ }
+      } catch (e) { /* */ }
+    }
+    return null;
+  }
+
+  // Withdraw missing tools (and a little food/torches) from the supply chest (sign: supply/tools).
+  async function restockFromSupply() {
+    const chests = scanChests(24);
+    const supply = chests.find((c) => /supply|tools|gear|items/.test(c.label));
+    if (!supply) return false;
+    const mcData = require('minecraft-data')(bot.version);
+    const lacksTool = (kind) => !bot.inventory.items().some((i) => i.name.endsWith(`_${kind}`));
+    try {
+      await bot.pathfinder.goto(new goals.GoalGetToBlock(supply.pos.x, supply.pos.y, supply.pos.z));
+      const chest = await bot.openContainer(bot.blockAt(supply.pos));
+      for (const item of chest.containerItems()) {
+        const toolKind = (item.name.match(/_(pickaxe|axe|sword|shovel|hoe)$/) || [])[1];
+        const isFood = mcData.foodsByName && mcData.foodsByName[item.name];
+        if (toolKind && lacksTool(toolKind)) {
+          try { await chest.withdraw(item.type, null, 1); } catch (e) { /* */ }
+        } else if (isFood && bot.food < 16) {
+          try { await chest.withdraw(item.type, null, Math.min(8, item.count)); } catch (e) { /* */ }
+        } else if (item.name === 'torch' && !bot.inventory.items().some((i) => i.name === 'torch')) {
+          try { await chest.withdraw(item.type, null, Math.min(16, item.count)); } catch (e) { /* */ }
+        }
+      }
+      try { chest.close(); } catch (e) { /* */ }
+    } catch (e) { return false; }
+    return true;
+  }
+
   // ---- building -------------------------------------------------------------
 
   function placeableItem(preferred) {
@@ -933,6 +1039,9 @@ function makeSkills(bot, config, state) {
     drop,
     depositToChest,
     depositLoot,
+    depositLabeled,
+    restockFromSupply,
+    scanChests,
     tpTo,
     farm,
     tpToOwner,

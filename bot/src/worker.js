@@ -104,9 +104,16 @@ function createWorker(config, def, manager) {
   async function baseRun(spot) {
     state.goal = def.chest ? 'returning to my chest' : 'returning to base';
     log('loot run ->', def.chest ? 'own chest' : 'base');
-    skills.tpTo(spot.x, spot.y, spot.z);          // needs op; falls back to depositing wherever it lands
-    await new Promise((r) => setTimeout(r, 2000)); // let the tp + chunk load settle
-    await skills.depositLoot();                     // dump loot, keep tools
+    // WALK to base (no op needed). If it can't path there (too far/blocked), try a tp if op'd.
+    try {
+      await bot.pathfinder.goto(new goals.GoalNear(spot.x, spot.y, spot.z, 2));
+    } catch (e) {
+      skills.tpTo(spot.x, spot.y, spot.z);
+      await new Promise((r) => setTimeout(r, 1800));
+    }
+    await skills.restockFromSupply();               // grab tools from the supply chest if missing
+    const e = await skills.depositLabeled();         // route loot to labeled chests
+    if (e) await skills.depositLoot();               // fallback: nearest chest, keep tools
   }
 
   async function runJob() {
