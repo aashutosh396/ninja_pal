@@ -309,21 +309,19 @@ function makeSkills(bot, config, state) {
     const p = b && b.getProperties ? b.getProperties() : {};
     return p.open === true || p.open === 'true';
   };
+  let doorBusy = false;
   async function doorTick() {
-    const moving = bot.pathfinder && bot.pathfinder.isMoving && bot.pathfinder.isMoving();
-    if (moving) {
-      const door = bot.findBlock({ matching: (b) => isDoorBlock(b), maxDistance: 2 });
-      if (door && !isDoorOpen(door)) {
-        try { await bot.activateBlock(door); lastDoorPos = door.position.clone(); } catch (e) { /* */ }
-        return;
-      }
-    }
-    // close the door we walked through, once we're clear of it
-    if (lastDoorPos && bot.entity.position.distanceTo(lastDoorPos) > 3) {
-      const b = bot.blockAt(lastDoorPos);
-      if (isDoorBlock(b) && isDoorOpen(b)) { try { await bot.activateBlock(b); } catch (e) { /* */ } }
-      lastDoorPos = null;
-    }
+    if (doorBusy) return;
+    // Open the nearest CLOSED door within reach so the doorway is passable (no moving-gate, since
+    // a stuck bot isn't "moving"). The pathfinder treats a closed door as a wall, so we open it.
+    const door = bot.findBlock({ matching: (b) => isDoorBlock(b) && !isDoorOpen(b), maxDistance: 4.5 });
+    if (!door) return;
+    doorBusy = true;
+    try {
+      // face it and toggle it open
+      await bot.lookAt(door.position.offset(0.5, 0.5, 0.5), true);
+      await bot.activateBlock(door);
+    } catch (e) { /* */ } finally { doorBusy = false; }
   }
 
   // Auto-eat when hungry so the pal doesn't starve (and natural regen keeps health up).
