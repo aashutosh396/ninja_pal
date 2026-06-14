@@ -514,7 +514,9 @@ function makeSkills(bot, config, state) {
     });
   }
 
-  // Deposit loot, routing each resource to its labeled chest; keeps tools/weapons/food.
+  // Deposit loot, routing each resource to its labeled chest; if a chest is FULL, overflow into
+  // any other chest with space. Keeps tools/weapons/food. Returns null if it deposited (or had
+  // nothing); a message if there were no usable chests.
   async function depositLabeled() {
     const mcData = require('minecraft-data')(bot.version);
     const chests = scanChests(24);
@@ -523,27 +525,46 @@ function makeSkills(bot, config, state) {
     const drops = chests.filter((c) => c !== supply);
     if (!drops.length) return 'no deposit chest at base';
 
-    const groups = new Map();
-    for (const it of bot.inventory.items()) {
-      if (isGear(it.name, mcData)) continue;
-      const res = resourceOf(it.name);
-      const target =
-        drops.find((c) => c.label && (c.label.includes(res) || res.includes(c.label))) ||
-        drops.find((c) => /deposit|loot|drop|store|misc|junk/.test(c.label)) ||
-        drops.find((c) => !c.label) ||
-        drops[0];
-      const k = `${target.pos.x},${target.pos.y},${target.pos.z}`;
-      if (!groups.has(k)) groups.set(k, { pos: target.pos, items: [] });
-      groups.get(k).items.push(it);
-    }
-    for (const g of groups.values()) {
-      if (state.cancel) break;
+    const isGeneric = (c) => !c.label || /deposit|loot|drop|store|misc|junk/.test(c.label);
+    const lootLeft = () => bot.inventory.items().filter((it) => !isGear(it.name, mcData));
+    // resource-labeled chests first, then generic, then unlabeled.
+    const ordered = [
+      ...drops.filter((c) => c.label && !isGeneric(c)),
+      ...drops.filter((c) => isGeneric(c) && c.label),
+      ...drops.filter((c) => !c.label),
+    ];
+
+    // Pass 1: put each resource in its matching chest; generic chests accept anything.
+    for (const c of ordered) {
+      if (state.cancel || !lootLeft().length) break;
       try {
-        await bot.pathfinder.goto(new goals.GoalGetToBlock(g.pos.x, g.pos.y, g.pos.z));
-        const chest = await bot.openContainer(bot.blockAt(g.pos));
-        for (const it of g.items) { try { await chest.deposit(it.type, null, it.count); } catch (e) { /* */ } }
+        await bot.pathfinder.goto(new goals.GoalGetToBlock(c.pos.x, c.pos.y, c.pos.z));
+        const chest = await bot.openContainer(bot.blockAt(c.pos));
+        for (const it of bot.inventory.items()) {
+          if (isGear(it.name, mcData)) continue;
+          const res = resourceOf(it.name);
+          const wrongLabel = c.label && !isGeneric(c) && !(c.label.includes(res) || res.includes(c.label));
+          if (wrongLabel) continue; // don't put wood in the "iron" chest on the first pass
+          try { await chest.deposit(it.type, null, it.count); } catch (e) { /* full / no fit */ }
+        }
         try { chest.close(); } catch (e) { /* */ }
       } catch (e) { /* */ }
+    }
+
+    // Pass 2 (overflow): anything still on us goes into ANY chest with space, labels ignored.
+    if (lootLeft().length) {
+      for (const c of ordered) {
+        if (state.cancel || !lootLeft().length) break;
+        try {
+          await bot.pathfinder.goto(new goals.GoalGetToBlock(c.pos.x, c.pos.y, c.pos.z));
+          const chest = await bot.openContainer(bot.blockAt(c.pos));
+          for (const it of bot.inventory.items()) {
+            if (isGear(it.name, mcData)) continue;
+            try { await chest.deposit(it.type, null, it.count); } catch (e) { /* */ }
+          }
+          try { chest.close(); } catch (e) { /* */ }
+        } catch (e) { /* */ }
+      }
     }
     return null;
   }
