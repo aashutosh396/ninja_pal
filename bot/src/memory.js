@@ -10,9 +10,9 @@ const FILE = path.join(__dirname, '..', 'memory.json');
 function load() {
   try {
     const m = JSON.parse(fs.readFileSync(FILE, 'utf8'));
-    return { notes: Array.isArray(m.notes) ? m.notes : [], home: m.home || null, base: m.base || null };
+    return { notes: Array.isArray(m.notes) ? m.notes : [], home: m.home || null, base: m.base || null, spawn: m.spawn || null, supply: m.supply || null };
   } catch (e) {
-    return { notes: [], home: null, base: null };
+    return { notes: [], home: null, base: null, spawn: null, supply: null };
   }
 }
 
@@ -61,6 +61,16 @@ function getSpawn() {
   return mem.spawn;
 }
 
+// The shared supply chest (workers take tools/food from it; loot is never deposited into it).
+function setSupply(pos) {
+  mem.supply = { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) };
+  save();
+}
+
+function getSupply() {
+  return mem.supply;
+}
+
 function summary() {
   const parts = [];
   if (mem.home) parts.push(`home=(${mem.home.x},${mem.home.y},${mem.home.z})`);
@@ -68,4 +78,4 @@ function summary() {
   return parts.join(' | ') || 'nothing remembered yet';
 }
 
-module.exports = { add, setHome, getHome, setBase, getBase, setSpawn, getSpawn, summary, all: () => mem };
+module.exports = { add, setHome, getHome, setBase, getBase, setSpawn, getSpawn, setSupply, getSupply, summary, all: () => mem };

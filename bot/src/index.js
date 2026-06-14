@@ -95,7 +95,7 @@ function route(m, fallback) {
     say('commands:');
     say('- worker create <name> <job>   (job = free text or a role)');
     say('- worker list | worker roles | worker remove <name>');
-    say('- set base | set spawn | set op <name>');
+    say('- set base | set supply | set spawn | set op <name>');
     say('- <name> <cmd>  |  all <cmd>  |  /msg <name> <cmd>');
     say('- per worker: come/stop/follow/deposit/restock/this is your chest/clear chest/status');
     say('- crew: "supplies are ready" | "everyone come deposit"');
@@ -104,6 +104,7 @@ function route(m, fallback) {
 
   // --- base / spawn / op ---
   if (/^(set base|base here|set depot)\b/.test(lm)) { setBaseAtOwner(); return; }
+  if (/^(set supply|supply chest here|this is the supply chest|supply here|set supply chest)\b/.test(lm)) { setSupplyAtOwner(); return; }
   if (/^(set spawn|spawn here|set world ?spawn)\b/.test(lm)) { setSpawnAtOwner(); return; }
   if ((mm = lm.match(/^set op\s+(\S+)/))) {
     say(`/op ${mm[1]}`);
@@ -175,6 +176,15 @@ function setBaseAtOwner() {
   memory.setBase(p);
   const b = memory.getBase();
   say(`base set at ${b.x},${b.y},${b.z} — put chests there (sign a chest "supply", others "deposit"/"iron"/etc). i'll walk loot here when full`);
+}
+
+// Supply chest = where workers TAKE tools/food; loot is never deposited here.
+function setSupplyAtOwner() {
+  const p = ownerSpot();
+  if (!p) { say("can't see you to set the supply chest — get near a worker"); return; }
+  memory.setSupply(p);
+  const s = memory.getSupply();
+  say(`supply chest set at ${s.x},${s.y},${s.z} — workers take tools/food here and won't dump loot here`);
 }
 
 // Spawn = the world spawn point (separate from base). Needs a worker op'd.

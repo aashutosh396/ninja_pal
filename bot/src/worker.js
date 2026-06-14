@@ -151,16 +151,23 @@ function createWorker(config, def, manager) {
       await new Promise((r) => setTimeout(r, 1800));
     }
     await skills.restockFromSupply();               // grab tools from the supply chest if missing
-    let e = await skills.depositLabeled();           // route loot to labeled chests (overflow-safe)
-    // If this spot had no chest (e.g. an assigned chest that doesn't exist), try the shared base.
+
+    // If a chest is assigned, deposit into THAT exact chest.
+    if (def.chest) {
+      const e1 = await skills.depositIntoChestAt(def.chest);
+      if (!e1) return;
+      log('assigned chest issue —', e1);
+    }
+    // Otherwise (or if the assigned chest is gone): route to labeled/non-supply chests at base.
+    let e = await skills.depositLabeled();
     if (e) {
       const base = memory.getBase();
-      if (base && (!def.chest || base.x !== def.chest.x || base.z !== def.chest.z)) {
+      if (base) {
         try { await bot.pathfinder.goto(new goals.GoalNear(base.x, base.y, base.z, 2)); } catch (err) { /* */ }
         e = await skills.depositLabeled();
       }
     }
-    if (e) e = await skills.depositLoot();           // last resort: nearest chest, keep tools
+    if (e) e = await skills.depositLoot();           // last resort: nearest non-supply chest
     if (e) log('could not deposit —', e);
   }
 

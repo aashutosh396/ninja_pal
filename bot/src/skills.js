@@ -5,6 +5,7 @@
 
 const { goals, Movements } = require('mineflayer-pathfinder');
 const { Vec3 } = require('vec3');
+const memory = require('./memory');
 
 // Blocks the pal will happily place when building (preferred order).
 const BUILD_BLOCKS = [
@@ -361,13 +362,70 @@ function makeSkills(bot, config, state) {
     return tossed ? null : `couldn't drop ${wanted}`;
   }
 
-  // Gear the worker should NEVER deposit on a loot run (so it can keep working).
-  function isGear(name, mcData) {
+  const FOOD_RESERVE = 8; // food a worker keeps to eat; surplus gets deposited
+
+  // Tools/weapons/utility a worker keeps (NOT food — food is handled with a reserve so hunters
+  // and farmers actually deposit their harvest).
+  function isKeepTool(name) {
     if (/_(pickaxe|axe|sword|shovel|hoe)$/.test(name)) return true;
     if (['bucket', 'water_bucket', 'lava_bucket', 'bow', 'crossbow', 'arrow', 'shield',
       'flint_and_steel', 'torch', 'crafting_table', 'furnace', 'shears'].includes(name)) return true;
-    if (mcData.foodsByName && mcData.foodsByName[name]) return true;
     return false;
+  }
+
+  // Everything a worker is carrying that counts as "supplies/gear" (incl. food) — for status.
+  function isGear(name, mcData) {
+    return isKeepTool(name) || (mcData.foodsByName && mcData.foodsByName[name]);
+  }
+
+  // Is there still depositable loot on us? (non-tool, or food beyond the reserve)
+  function hasLoot(mcData) {
+    let food = 0;
+    for (const it of bot.inventory.items()) {
+      if (isKeepTool(it.name)) continue;
+      if (mcData.foodsByName && mcData.foodsByName[it.name]) { food += it.count; if (food > FOOD_RESERVE) return true; continue; }
+      return true;
+    }
+    return false;
+  }
+
+  // Deposit loot into an OPEN chest: all non-tools, plus food beyond foodBox.n (shared reserve).
+  async function dumpInto(chest, foodBox) {
+    const mcData = require('minecraft-data')(bot.version);
+    for (const it of bot.inventory.items()) {
+      if (isKeepTool(it.name)) continue;
+      if (mcData.foodsByName && mcData.foodsByName[it.name]) {
+        const keep = Math.min(it.count, foodBox.n);
+        foodBox.n -= keep;
+        const dep = it.count - keep;
+        if (dep > 0) { try { await chest.deposit(it.type, null, dep); } catch (e) { /* full */ } }
+      } else {
+        try { await chest.deposit(it.type, null, it.count); } catch (e) { /* full */ }
+      }
+    }
+  }
+
+  // Find a chest block at/adjacent to a saved spot (handles standing on/next to the chest).
+  function chestBlockNear(pos) {
+    const chestNames = new Set(['chest', 'trapped_chest', 'barrel']);
+    const offs = [[0, 0, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]];
+    for (const d of offs) {
+      const b = bot.blockAt(new Vec3(pos.x + d[0], pos.y + d[1], pos.z + d[2]));
+      if (b && chestNames.has(b.name)) return b;
+    }
+    return null;
+  }
+
+  // Deposit loot into the EXACT chest at a saved spot (for an assigned chest).
+  async function depositIntoChestAt(pos) {
+    try { await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 2)); } catch (e) { /* */ }
+    const block = chestBlockNear(pos);
+    if (!block) return 'no chest at the assigned spot';
+    let chest;
+    try { chest = await bot.openContainer(block); } catch (e) { return "couldn't open my chest"; }
+    await dumpInto(chest, { n: FOOD_RESERVE });
+    try { chest.close(); } catch (e) { /* */ }
+    return null;
   }
 
   // Teleport to a coordinate via server command (needs cheats + the worker /op'd).
@@ -376,7 +434,7 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
-  // Dump LOOT into the nearest NON-supply chest(s), keeping tools/weapons/food. Overflow-safe.
+  // Dump LOOT into the nearest NON-supply chest(s), keeping tools + a food reserve. Overflow-safe.
   async function depositLoot() {
     const mcData = require('minecraft-data')(bot.version);
     const me = bot.entity.position;
@@ -384,16 +442,13 @@ function makeSkills(bot, config, state) {
       .filter((c) => !/supply|tools|gear|items/.test(c.label))
       .sort((a, b) => a.pos.distanceTo(me) - b.pos.distanceTo(me));
     if (!chests.length) return 'no chest at base';
-    const lootLeft = () => bot.inventory.items().filter((it) => !isGear(it.name, mcData));
+    const foodBox = { n: FOOD_RESERVE };
     for (const c of chests) {
-      if (state.cancel || !lootLeft().length) break;
+      if (state.cancel || !hasLoot(mcData)) break;
       try {
         await bot.pathfinder.goto(new goals.GoalGetToBlock(c.pos.x, c.pos.y, c.pos.z));
         const chest = await bot.openContainer(bot.blockAt(c.pos));
-        for (const it of bot.inventory.items()) {
-          if (isGear(it.name, mcData)) continue;
-          try { await chest.deposit(it.type, null, it.count); } catch (e) { /* full */ }
-        }
+        await dumpInto(chest, foodBox);
         try { chest.close(); } catch (e) { /* */ }
       } catch (e) { /* */ }
     }
@@ -520,51 +575,57 @@ function makeSkills(bot, config, state) {
   // Deposit loot, routing each resource to its labeled chest; if a chest is FULL, overflow into
   // any other chest with space. Keeps tools/weapons/food. Returns null if it deposited (or had
   // nothing); a message if there were no usable chests.
+  // True if this chest is the supply chest — by sign label OR by the saved supply position.
+  function isSupplyChest(c) {
+    if (/supply|tools|gear|items/.test(c.label)) return true;
+    const s = memory.getSupply();
+    return !!(s && Math.abs(c.pos.x - s.x) <= 1 && Math.abs(c.pos.y - s.y) <= 1 && Math.abs(c.pos.z - s.z) <= 1);
+  }
+
   async function depositLabeled() {
     const mcData = require('minecraft-data')(bot.version);
     const chests = scanChests(24);
     if (!chests.length) return 'no chests at base';
-    // NEVER deposit loot into a supply chest.
-    const drops = chests.filter((c) => !/supply|tools|gear|items/.test(c.label));
+    // NEVER deposit loot into the supply chest (by label or saved position).
+    const drops = chests.filter((c) => !isSupplyChest(c));
     if (!drops.length) return 'no deposit chest at base (only supply?)';
 
     const isGeneric = (c) => !c.label || /deposit|loot|drop|store|misc|junk/.test(c.label);
-    const lootLeft = () => bot.inventory.items().filter((it) => !isGear(it.name, mcData));
-    // resource-labeled chests first, then generic, then unlabeled.
     const ordered = [
       ...drops.filter((c) => c.label && !isGeneric(c)),
       ...drops.filter((c) => isGeneric(c) && c.label),
       ...drops.filter((c) => !c.label),
     ];
+    const foodBox = { n: FOOD_RESERVE };
 
-    // Pass 1: put each resource in its matching chest; generic chests accept anything.
+    // Pass 1: resource-labeled chests take only their resource; generic chests take anything.
     for (const c of ordered) {
-      if (state.cancel || !lootLeft().length) break;
+      if (state.cancel || !hasLoot(mcData)) break;
       try {
         await bot.pathfinder.goto(new goals.GoalGetToBlock(c.pos.x, c.pos.y, c.pos.z));
         const chest = await bot.openContainer(bot.blockAt(c.pos));
-        for (const it of bot.inventory.items()) {
-          if (isGear(it.name, mcData)) continue;
-          const res = resourceOf(it.name);
-          const wrongLabel = c.label && !isGeneric(c) && !(c.label.includes(res) || res.includes(c.label));
-          if (wrongLabel) continue; // don't put wood in the "iron" chest on the first pass
-          try { await chest.deposit(it.type, null, it.count); } catch (e) { /* full / no fit */ }
+        if (c.label && !isGeneric(c)) {
+          for (const it of bot.inventory.items()) {
+            if (isKeepTool(it.name) || (mcData.foodsByName && mcData.foodsByName[it.name])) continue;
+            const res = resourceOf(it.name);
+            if (!(c.label.includes(res) || res.includes(c.label))) continue;
+            try { await chest.deposit(it.type, null, it.count); } catch (e) { /* */ }
+          }
+        } else {
+          await dumpInto(chest, foodBox);
         }
         try { chest.close(); } catch (e) { /* */ }
       } catch (e) { /* */ }
     }
 
-    // Pass 2 (overflow): anything still on us goes into ANY chest with space, labels ignored.
-    if (lootLeft().length) {
+    // Pass 2 (overflow): dump whatever's left into any non-supply chest with space.
+    if (hasLoot(mcData)) {
       for (const c of ordered) {
-        if (state.cancel || !lootLeft().length) break;
+        if (state.cancel || !hasLoot(mcData)) break;
         try {
           await bot.pathfinder.goto(new goals.GoalGetToBlock(c.pos.x, c.pos.y, c.pos.z));
           const chest = await bot.openContainer(bot.blockAt(c.pos));
-          for (const it of bot.inventory.items()) {
-            if (isGear(it.name, mcData)) continue;
-            try { await chest.deposit(it.type, null, it.count); } catch (e) { /* */ }
-          }
+          await dumpInto(chest, foodBox);
           try { chest.close(); } catch (e) { /* */ }
         } catch (e) { /* */ }
       }
@@ -575,14 +636,20 @@ function makeSkills(bot, config, state) {
   // Withdraw ONLY what's needed from the supply chest (sign: supply/tools), up to a small target
   // ("supply ratio") — e.g. up to 2 pickaxes, 1 axe/sword/shovel, a little food + torches.
   async function restockFromSupply() {
-    const chests = scanChests(24);
-    const supply = chests.find((c) => /supply|tools|gear|items/.test(c.label));
-    if (!supply) return false;
+    // Prefer the saved supply position (signs may not read); else a sign-labeled supply chest.
+    let supplyBlock = null;
+    const s = memory.getSupply();
+    if (s) supplyBlock = chestBlockNear(new Vec3(s.x, s.y, s.z));
+    if (!supplyBlock) {
+      const c = scanChests(24).find((c2) => /supply|tools|gear|items/.test(c2.label));
+      if (c) supplyBlock = bot.blockAt(c.pos);
+    }
+    if (!supplyBlock) return false;
     const mcData = require('minecraft-data')(bot.version);
     const countMine = (match) => bot.inventory.items().filter(match).reduce((a, b) => a + b.count, 0);
     try {
-      await bot.pathfinder.goto(new goals.GoalGetToBlock(supply.pos.x, supply.pos.y, supply.pos.z));
-      const chest = await bot.openContainer(bot.blockAt(supply.pos));
+      await bot.pathfinder.goto(new goals.GoalGetToBlock(supplyBlock.position.x, supplyBlock.position.y, supplyBlock.position.z));
+      const chest = await bot.openContainer(supplyBlock);
 
       // take up to `target` of items matching `match` (works on both inventory + chest items via .name)
       const take = async (match, target) => {
@@ -600,6 +667,8 @@ function makeSkills(bot, config, state) {
       await take((i) => i.name.endsWith('_sword'), 1);
       await take((i) => i.name.endsWith('_axe'), 1);
       await take((i) => i.name.endsWith('_shovel'), 1);
+      await take((i) => i.name.endsWith('_hoe'), 1);
+      await take((i) => i.name.endsWith('_seeds') || i.name === 'carrot' || i.name === 'potato', 16);
       if (bot.food < 16) await take((i) => mcData.foodsByName && mcData.foodsByName[i.name], 8);
       await take((i) => i.name === 'torch', 16);
 
@@ -1086,6 +1155,8 @@ function makeSkills(bot, config, state) {
     depositToChest,
     depositLoot,
     depositLabeled,
+    depositIntoChestAt,
+    chestBlockNear,
     restockFromSupply,
     gearSummary,
     scanChests,
