@@ -84,7 +84,12 @@ function createWorker(config, def, manager) {
   function startLoops() {
     if (loops) return;
     loops = true;
-    timers.push(setInterval(() => { if (skills && bot && bot.entity) { try { skills.panicTick(); skills.defendTick(); } catch (e) { /* */ } } }, 1000));
+    timers.push(setInterval(() => {
+      if (skills && bot && bot.entity) {
+        try { skills.panicTick(); skills.defendTick(); } catch (e) { /* */ }
+        if (skills.doorTick) skills.doorTick().catch(() => {});
+      }
+    }, 700));
     timers.push(setInterval(() => { if (skills) skills.eatTick().catch(() => {}); }, 2500));
     timers.push(setInterval(() => { jobTick().catch((e) => log('job err:', e.message)); }, 8000));
   }

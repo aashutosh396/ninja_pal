@@ -138,10 +138,8 @@ function makeSkills(bot, config, state) {
     const m = new Movements(bot);
     m.allowSprinting = true;
     m.canDig = true;
-    // Strongly prefer walking / using doors over tunneling through walls. It will still dig as a
-    // LAST resort (no other path), but won't smash through a base to take a shortcut.
-    m.digCost = 100;
-    m.placeCost = 50; // also avoid scaffolding through/over the base
+    m.digCost = 3; // mild nudge to prefer walking; still digs freely for resources / to get unstuck
+
     // NEVER break doors / trapdoors / fence gates — go through or around them.
     try {
       for (const n of Object.keys(mcData.blocksByName)) {
@@ -150,7 +148,26 @@ function makeSkills(bot, config, state) {
           if (m.blocksCantBreak && id != null) m.blocksCantBreak.add(id);
         }
       }
-    } catch (e) { /* older mineflayer without blocksCantBreak */ }
+    } catch (e) { /* older mineflayer */ }
+
+    // No-dig ZONE around the base: dig freely in the world, but never tunnel through the base
+    // (the player's build). Outside the zone everything is normal, so the bot never gets trapped.
+    if (typeof m.safeToBreak === 'function') {
+      const origSafe = m.safeToBreak.bind(m);
+      m.safeToBreak = (block) => {
+        try {
+          const base = memory.getBase();
+          if (base && block && block.position) {
+            const p = block.position;
+            if (Math.abs(p.x - base.x) <= 6 && Math.abs(p.y - base.y) <= 4 && Math.abs(p.z - base.z) <= 6) {
+              return false; // protected base footprint -> use the door / go around
+            }
+          }
+        } catch (e) { /* */ }
+        return origSafe(block);
+      };
+    }
+
     bot.pathfinder.setMovements(m);
   }
 
@@ -282,6 +299,30 @@ function makeSkills(bot, config, state) {
     if (target && !bot.pvp.target) {
       equipBestWeapon();
       bot.pvp.attack(target);
+    }
+  }
+
+  // --- doors: open one in the way, close it behind ---------------------------
+  let lastDoorPos = null;
+  const isDoorBlock = (b) => b && (b.name.endsWith('_door') || b.name.endsWith('_fence_gate'));
+  const isDoorOpen = (b) => {
+    const p = b && b.getProperties ? b.getProperties() : {};
+    return p.open === true || p.open === 'true';
+  };
+  async function doorTick() {
+    const moving = bot.pathfinder && bot.pathfinder.isMoving && bot.pathfinder.isMoving();
+    if (moving) {
+      const door = bot.findBlock({ matching: (b) => isDoorBlock(b), maxDistance: 2 });
+      if (door && !isDoorOpen(door)) {
+        try { await bot.activateBlock(door); lastDoorPos = door.position.clone(); } catch (e) { /* */ }
+        return;
+      }
+    }
+    // close the door we walked through, once we're clear of it
+    if (lastDoorPos && bot.entity.position.distanceTo(lastDoorPos) > 3) {
+      const b = bot.blockAt(lastDoorPos);
+      if (isDoorBlock(b) && isDoorOpen(b)) { try { await bot.activateBlock(b); } catch (e) { /* */ } }
+      lastDoorPos = null;
     }
   }
 
@@ -1422,6 +1463,7 @@ function makeSkills(bot, config, state) {
     attackNearest,
     equipBestWeapon,
     defendTick,
+    doorTick,
     eatTick,
     craft,
     giveToOwner,
