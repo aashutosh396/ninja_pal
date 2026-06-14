@@ -739,9 +739,36 @@ function makeSkills(bot, config, state) {
     } catch (e) { return 'couldnt reach supply chest'; }
   }
 
-  // Forge a stone tool set (gathers wood + stone as needed); the tools stay on the worker.
+  // Withdraw up to `amount` of items matching `match` from the base deposit chests (not supply).
+  async function withdrawFromBase(match, amount) {
+    const chests = scanChests(24).filter((c) => !isSupplyChest(c));
+    let got = 0;
+    for (const c of chests) {
+      if (got >= amount || state.cancel) break;
+      try {
+        await bot.pathfinder.goto(new goals.GoalGetToBlock(c.pos.x, c.pos.y, c.pos.z));
+        const chest = await bot.openContainer(bot.blockAt(c.pos));
+        for (const item of chest.containerItems()) {
+          if (got >= amount) break;
+          if (match(item)) {
+            const take = Math.min(amount - got, item.count);
+            try { await chest.withdraw(item.type, null, take); got += take; } catch (e) { /* */ }
+          }
+        }
+        try { chest.close(); } catch (e) { /* */ }
+      } catch (e) { /* */ }
+    }
+    return got;
+  }
+
+  // Forge a stone tool set. First uses materials the crew already stored (logs/cobblestone in the
+  // deposit chests); only gathers the shortfall itself. Tools stay on the worker.
   async function makeToolset() {
     const countName = (n) => bot.inventory.items().filter((i) => i.name === n).reduce((a, b) => a + b.count, 0);
+    // 1) pull what the miners/lumberjacks already stored
+    await withdrawFromBase((i) => i.name.endsWith('_log') || i.name.endsWith('_planks'), 4);
+    await withdrawFromBase((i) => i.name === 'cobblestone', 16);
+    // 2) gather only what's still missing
     if (countLogs() < 2 && !bot.inventory.items().some((i) => i.name.endsWith('_planks'))) {
       const e = await collect('wood', 3);
       if (e) return e;
@@ -1307,6 +1334,7 @@ function makeSkills(bot, config, state) {
     supplyCounts,
     stockSupply,
     makeToolset,
+    withdrawFromBase,
     ensureTool,
     plantTrees,
     gearSummary,

@@ -28,6 +28,8 @@ function createWorker(config, def, manager) {
   let stopped = false;        // set when dismissed — prevents auto-reconnect
   const timers = [];          // interval ids so we can stop cleanly
   let lastNudge = 0;          // throttle the logistics "supplies ready" announce
+  let lastSupplyCheck = 0;    // throttle opening the supply chest to count
+  let cachedSupply = null;    // last {tools, food} reading
 
   const log = (...a) => console.log(`[${name}]`, ...a);
   const RESOURCE_WORDS = ['dirt', 'cobblestone', 'stone', 'wood', 'logs', 'log', 'coal', 'iron', 'gold', 'diamond', 'sand', 'planks'];
@@ -216,35 +218,57 @@ function createWorker(config, def, manager) {
     }
   }
 
+  const TOOL_TARGET = 8;
+  const FOOD_TARGET = 24;
+
+  async function idleAtBase() {
+    const spot = memory.getBase() || memory.getSupply();
+    if (spot) { try { await bot.pathfinder.goto(new goals.GoalNear(spot.x, spot.y, spot.z, 3)); } catch (e) { /* */ } }
+  }
+
   // Logistics/foreman: keep the supply chest stocked with tools + food, and keep the crew working.
   async function runLogistics() {
     if (!memory.getSupply()) {
       if (Date.now() - lastNudge > 60000) { lastNudge = Date.now(); bot.chat(`${name}: set a supply chest first — stand at it and say "set supply"`); }
+      await idleAtBase();
       return;
     }
-    const counts = await skills.supplyCounts();
-    if (counts && counts.tools < 6) {
+
+    // Throttle the (expensive) supply-chest read; reuse the cached counts in between.
+    let counts = cachedSupply;
+    if (!counts || Date.now() - lastSupplyCheck > 20000) {
+      counts = await skills.supplyCounts();
+      cachedSupply = counts;
+      lastSupplyCheck = Date.now();
+    }
+    if (!counts) { await idleAtBase(); return; }
+
+    if (counts.tools < TOOL_TARGET) {
       state.goal = 'forging tools for supply';
-      await skills.makeToolset();
+      await skills.makeToolset();   // pulls logs/cobble from base chests first, then gathers shortfall
       await skills.stockSupply();
-      bot.chat(`${name}: restocked tools in the supply chest`);
+      cachedSupply = null;          // force a fresh read next time
+      bot.chat(`${name}: restocked tools in supply`);
       return;
     }
-    if (counts && counts.food < 24) {
+    if (counts.food < FOOD_TARGET) {
       state.goal = 'getting food for supply';
       const e = await skills.hunt();
       await skills.stockSupply();
+      cachedSupply = null;
       if (e) await skills.wander();
-      else bot.chat(`${name}: added food to the supply chest`);
+      else bot.chat(`${name}: added food to supply`);
       return;
     }
-    // Everything stocked -> keep the crew working + tell them supplies are ready (throttled).
-    state.goal = 'running logistics';
-    if (Date.now() - lastNudge > 60000) {
+
+    // Stocked -> idle at base and (occasionally) keep the crew moving.
+    state.goal = 'running logistics (stocked)';
+    if (Date.now() - lastNudge > 90000) {
       lastNudge = Date.now();
       if (manager.tellAll) manager.tellAll('work');
-      bot.chat(`${name}: supplies are stocked — crew, grab tools/food anytime, back to work!`);
+      bot.chat(`${name}: supplies stocked — crew, grab tools/food and keep working`);
     }
+    await idleAtBase();
   }
 
   function describe(p) {
