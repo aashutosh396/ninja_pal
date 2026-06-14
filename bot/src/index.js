@@ -224,9 +224,9 @@ function setBaseAtOwner() {
   memory.setBase(p);
   const b = memory.getBase();
   say(`/setblock ${b.x} ${b.y - 1} ${b.z} minecraft:emerald_block`); // emerald marker under the base
-  say(`/kill @e[type=minecraft:text_display,tag=npbase]`);            // clear any old base hologram
-  // sit just above the emerald block, light-green text
-  say(`/summon minecraft:text_display ${b.x + 0.5} ${b.y + 0.6} ${b.z + 0.5} {text:'{"text":"Base","color":"green"}',billboard:"center",Tags:["npbase"]}`);
+  say(`/kill @e[type=minecraft:text_display,x=${b.x - 1},y=${b.y - 2},z=${b.z - 1},dx=2,dy=5,dz=2]`); // clear old holograms at this spot
+  // sit just above the emerald block, light-green text (1.21 component format)
+  say(`/summon minecraft:text_display ${b.x + 0.5} ${b.y + 0.6} ${b.z + 0.5} {text:{text:"Base",color:"green"},billboard:"center",Tags:["npbase"]}`);
   say(`base set at ${b.x},${b.y},${b.z} — emerald block + a floating green "Base" label`);
 
   // The game "begins" at set base: auto-spawn a logistics tool_guy if the crew doesn't have one.
@@ -246,8 +246,8 @@ function setSupplyAtOwner() {
   const s = memory.getSupply();
   // Hologram sits just above the chest top (chest block y + ~1.2), light-green text.
   const hy = (info.chest ? info.chest.y + 1.2 : s.y + 0.3);
-  say(`/kill @e[type=minecraft:text_display,tag=npsupply]`);
-  say(`/summon minecraft:text_display ${s.x + 0.5} ${hy} ${s.z + 0.5} {text:'{"text":"Supply","color":"green"}',billboard:"center",Tags:["npsupply"]}`);
+  say(`/kill @e[type=minecraft:text_display,x=${s.x - 1},y=${s.y - 2},z=${s.z - 1},dx=2,dy=5,dz=2]`);
+  say(`/summon minecraft:text_display ${s.x + 0.5} ${hy} ${s.z + 0.5} {text:{text:"Supply",color:"green"},billboard:"center",Tags:["npsupply"]}`);
   say(`supply chest set at ${s.x},${s.y},${s.z} — floating green "Supply" label just above it`);
 }
 

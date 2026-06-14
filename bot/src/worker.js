@@ -232,8 +232,8 @@ function createWorker(config, def, manager) {
     const s = memory.getSupply();
     if (!s) return;
     try {
-      bot.chat(`/kill @e[type=minecraft:text_display,tag=npsupply]`);
-      bot.chat(`/summon minecraft:text_display ${s.x + 0.5} ${s.y + 1.2} ${s.z + 0.5} {text:'{"text":"Supply","color":"green"}',billboard:"center",Tags:["npsupply"]}`);
+      bot.chat(`/kill @e[type=minecraft:text_display,x=${s.x - 1},y=${s.y - 2},z=${s.z - 1},dx=2,dy=5,dz=2]`);
+      bot.chat(`/summon minecraft:text_display ${s.x + 0.5} ${s.y + 1.2} ${s.z + 0.5} {text:{text:"Supply",color:"green"},billboard:"center",Tags:["npsupply"]}`);
     } catch (e) { /* needs op; fine */ }
   }
 
