@@ -25,6 +25,8 @@ function createWorker(config, def, manager) {
   let autonomy = null;
   let loops = false;
   let gatherFails = 0;
+  let stopped = false;        // set when dismissed — prevents auto-reconnect
+  const timers = [];          // interval ids so we can stop cleanly
 
   const log = (...a) => console.log(`[${name}]`, ...a);
   const RESOURCE_WORDS = ['dirt', 'cobblestone', 'stone', 'wood', 'logs', 'log', 'coal', 'iron', 'gold', 'diamond', 'sand', 'planks'];
@@ -32,6 +34,7 @@ function createWorker(config, def, manager) {
   const countFromText = (m) => { const n = m.match(/\b(\d{1,3})\b/); return n ? parseInt(n[1], 10) : undefined; };
 
   function connect() {
+    if (stopped) return;
     try {
       bot = mineflayer.createBot({
         host: wcfg.host || 'localhost',
@@ -64,8 +67,9 @@ function createWorker(config, def, manager) {
     bot.on('kicked', (r) => log('kicked:', r));
     bot.on('error', (e) => log('error:', e.message));
     bot.on('end', (r) => {
-      log('disconnected:', r, '— reconnect 8s');
       skills = null; autonomy = null; state.busy = false;
+      if (stopped) { log('stopped'); return; } // dismissed — do NOT reconnect
+      log('disconnected:', r, '— reconnect 8s');
       setTimeout(connect, 8000);
     });
   }
@@ -73,9 +77,9 @@ function createWorker(config, def, manager) {
   function startLoops() {
     if (loops) return;
     loops = true;
-    setInterval(() => { if (skills && bot && bot.entity) { try { skills.panicTick(); skills.defendTick(); } catch (e) { /* */ } } }, 1000);
-    setInterval(() => { if (skills) skills.eatTick().catch(() => {}); }, 2500);
-    setInterval(() => { jobTick().catch((e) => log('job err:', e.message)); }, 8000);
+    timers.push(setInterval(() => { if (skills && bot && bot.entity) { try { skills.panicTick(); skills.defendTick(); } catch (e) { /* */ } } }, 1000));
+    timers.push(setInterval(() => { if (skills) skills.eatTick().catch(() => {}); }, 2500));
+    timers.push(setInterval(() => { jobTick().catch((e) => log('job err:', e.message)); }, 8000));
   }
 
   async function jobTick() {
@@ -177,6 +181,7 @@ function createWorker(config, def, manager) {
     if (/\bset home\b|make this home|home here/.test(m)) { memory.setHome(bot.entity.position); bot.chat(`${name}: home set`); return; }
     if (/\b(defend|protect|guard)\b/.test(m)) { state.autoDefend = true; bot.chat(`${name}: got your back`); return; }
     if (/\b(stand down|chill|relax|at ease)\b/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat(`${name}: standing down`); return; }
+    if (/\bremember\b|\bnote\b|\bkeep in mind\b/.test(m)) { memory.add(message); bot.chat(`${name}: got it, noted`); return; }
 
     // one-shot tasks
     if (state.busy) { bot.chat(`${name}: busy — say "stop" to interrupt`); return; }
@@ -242,6 +247,8 @@ function createWorker(config, def, manager) {
   }
 
   function disconnect() {
+    stopped = true;
+    while (timers.length) clearInterval(timers.pop());
     try { if (bot) bot.quit('dismissed'); } catch (e) { /* */ }
   }
 
