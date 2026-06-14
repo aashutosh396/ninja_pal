@@ -310,25 +310,34 @@ function makeSkills(bot, config, state) {
     return p.open === true || p.open === 'true';
   };
   let doorBusy = false;
+  let doorCooldownUntil = 0;
+  let doorCooldownPos = null;
   async function doorTick() {
     if (doorBusy) return;
-    // Open the nearest CLOSED door within reach so the doorway is passable (no moving-gate, since
-    // a stuck bot isn't "moving"). The pathfinder treats a closed door as a wall, so we open it
-    // AND step through (the existing path was computed while it was still a wall).
+    const goal = bot.pathfinder && bot.pathfinder.goal;
+    if (!goal) return; // only operate doors while actually travelling somewhere
+    // Open the nearest CLOSED door in reach (the pathfinder treats it as a wall), step through,
+    // then close it behind us.
     const door = bot.findBlock({ matching: (b) => isDoorBlock(b) && !isDoorOpen(b), maxDistance: 4.5 });
     if (!door) return;
+    if (doorCooldownPos && Date.now() < doorCooldownUntil && door.position.equals(doorCooldownPos)) return; // just used it
     doorBusy = true;
-    const goal = bot.pathfinder && bot.pathfinder.goal;
     try {
       await bot.lookAt(door.position.offset(0.5, 0.5, 0.5), true);
-      await bot.activateBlock(door);
-      // Now that it's open, walk to the block just past the doorway (pathfinder routes through it).
+      await bot.activateBlock(door); // open
+      // walk to the block just past the doorway (door now open => pathfinder routes through)
       const me = bot.entity.position.floored();
       const d = door.position;
-      const sx = Math.sign(d.x - me.x);
-      const sz = Math.sign(d.z - me.z);
-      const far = { x: d.x + (sx || 0), y: me.y, z: d.z + (sz || 0) };
+      const far = { x: d.x + (Math.sign(d.x - me.x) || 0), y: me.y, z: d.z + (Math.sign(d.z - me.z) || 0) };
       await bot.pathfinder.goto(new goals.GoalBlock(far.x, far.y, far.z));
+      // close it behind us
+      const b = bot.blockAt(d);
+      if (isDoorBlock(b) && isDoorOpen(b)) {
+        await bot.lookAt(d.offset(0.5, 0.5, 0.5), true);
+        await bot.activateBlock(b);
+      }
+      doorCooldownPos = d.clone();
+      doorCooldownUntil = Date.now() + 5000; // don't re-open this door for a bit (avoids a loop)
     } catch (e) { /* */ } finally {
       if (goal) { try { bot.pathfinder.setGoal(goal, true); } catch (e) { /* */ } } // resume original route
       doorBusy = false;
