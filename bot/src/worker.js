@@ -270,6 +270,12 @@ function createWorker(config, def, manager) {
     if (/\b(defend|protect|guard)\b/.test(m)) { state.autoDefend = true; bot.chat(`${name}: got your back`); return; }
     if (/\b(stand down|chill|relax|at ease)\b/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat(`${name}: standing down`); return; }
     if (/\bremember\b|\bnote\b|\bkeep in mind\b/.test(m)) { memory.add(message); bot.chat(`${name}: got it, noted`); return; }
+    if (/\b(clear chest|forget chest|unassign chest|remove chest|reset chest|no chest|use base|use the base)\b/.test(m)) {
+      def.chest = null;
+      if (manager.persist) manager.persist();
+      bot.chat(`${name}: chest cleared — i'll use the shared base now`);
+      return;
+    }
     if (/\b(this is your chest|your chest|chest here|set chest|my chest|assign chest)\b/.test(m)) {
       const o = skills.findOwner();
       const p = o ? o.position : bot.entity.position; // your spot if visible, else where i'm standing
