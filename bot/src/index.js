@@ -180,8 +180,10 @@ function setBaseAtOwner() {
   if (!p) { say("can't see you to set the base — get near a worker and try again"); return; }
   memory.setBase(p);
   const b = memory.getBase();
-  say(`/setblock ${b.x} ${b.y - 1} ${b.z} minecraft:emerald_block`); // emerald marker under the base (needs op)
-  say(`base set at ${b.x},${b.y},${b.z} — marked with an emerald block. put a deposit chest here`);
+  say(`/setblock ${b.x} ${b.y - 1} ${b.z} minecraft:emerald_block`); // emerald marker under the base
+  say(`/kill @e[type=minecraft:text_display,tag=npbase]`);            // clear any old base hologram
+  say(`/summon minecraft:text_display ${b.x + 0.5} ${b.y + 1.4} ${b.z + 0.5} {text:'"Base"',billboard:"center",Tags:["npbase"]}`);
+  say(`base set at ${b.x},${b.y},${b.z} — emerald block + a floating "Base" label`);
 }
 
 // Supply chest = where workers TAKE tools/food; loot is never deposited here.
@@ -190,9 +192,10 @@ function setSupplyAtOwner() {
   if (!p) { say("can't see you to set the supply chest — get near a worker"); return; }
   memory.setSupply(p);
   const s = memory.getSupply();
-  // Place a sign labeled "Supply" at the spot (needs op). Front-text format works on 1.20+/1.21+.
-  say(`/setblock ${s.x} ${s.y} ${s.z} minecraft:oak_sign{front_text:{messages:['"Supply"','""','""','""']}}`);
-  say(`supply chest set at ${s.x},${s.y},${s.z} — labeled "Supply". workers take tools/food here, never dump loot here`);
+  // Float a "Supply" hologram over the chest (text_display entity; needs op).
+  say(`/kill @e[type=minecraft:text_display,tag=npsupply]`);
+  say(`/summon minecraft:text_display ${s.x + 0.5} ${s.y + 1.4} ${s.z + 0.5} {text:'"Supply"',billboard:"center",Tags:["npsupply"]}`);
+  say(`supply chest set at ${s.x},${s.y},${s.z} — floating "Supply" label. workers take tools/food here, never dump loot here`);
 }
 
 // Spawn = the world spawn point (separate from base). Needs a worker op'd.
