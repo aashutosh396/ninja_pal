@@ -360,26 +360,33 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
-  // Place a block at an exact world position, finding a solid neighbour to place against.
+  const PLACE_DIRS = [
+    new Vec3(0, -1, 0), new Vec3(0, 1, 0), new Vec3(1, 0, 0),
+    new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1),
+  ];
+
+  // Place a block at an exact world position. KEY: pathfind into reach of the target first
+  // (GoalPlaceBlock), then place against a solid neighbour. This is what makes building work.
   async function placeBlockAt(targetPos, preferred = BUILD_BLOCKS) {
     const existing = bot.blockAt(targetPos);
     if (existing && existing.boundingBox === 'block') return null; // already solid
     const item = placeableItem(preferred);
     if (!item) return 'no blocks to place';
+
+    // Move somewhere we can actually reach this spot.
     try {
-      await bot.equip(item, 'hand');
+      await bot.pathfinder.goto(new goals.GoalPlaceBlock(targetPos.clone(), bot.world, { range: 4 }));
     } catch (e) {
-      return 'couldn\'t hold a block';
+      /* maybe already in range; fall through and try to place */
     }
-    const dirs = [
-      new Vec3(0, -1, 0), new Vec3(0, 1, 0), new Vec3(1, 0, 0),
-      new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1),
-    ];
-    for (const d of dirs) {
-      const refPos = targetPos.plus(d);
-      const ref = bot.blockAt(refPos);
+    bot.pathfinder.setGoal(null);
+
+    for (const d of PLACE_DIRS) {
+      const ref = bot.blockAt(targetPos.plus(d));
       if (ref && ref.boundingBox === 'block') {
         try {
+          await bot.equip(item, 'hand');
+          await bot.lookAt(targetPos.offset(0.5, 0.5, 0.5), true);
           await bot.placeBlock(ref, new Vec3(-d.x, -d.y, -d.z)); // face points back to target
           return null;
         } catch (e) {
@@ -658,43 +665,64 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
-  // Build a small enclosed house (5x5, 3 high, doorway + roof + a torch inside).
+  // Build a small enclosed house (5x5, 3 high, doorway + roof + a torch). Built a few blocks
+  // IN FRONT of the pal so it doesn't wall itself in, bottom-up so each layer has support.
   async function buildHouse() {
     const names = ['cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'granite', 'cobbled_deepslate'];
     const have = () => bot.inventory.items().filter((i) => names.includes(i.name)).reduce((a, b) => a + b.count, 0);
-    if (have() < 50) {
+
+    // Gather materials over a few rounds (bail if there's nothing to gather here).
+    let tries = 0;
+    while (have() < 70 && tries < 6) {
+      if (state.cancel) return null;
+      const before = have();
       say('gathering blocks for a house');
       await mineOre('stone', 16);
-      if (have() < 40) await collect('dirt', 16);
+      if (have() < 70) await collect('dirt', 16);
+      if (have() === before) break;
+      tries++;
     }
-    if (have() < 20) return "couldn't get enough blocks for a house";
+    if (have() < 16) return "couldn't get blocks for a house (need stone/dirt nearby)";
 
-    say('building us a house');
-    const c = bot.entity.position.floored();
+    say('building us a house, stand back');
+    const { dx, dz } = forwardCardinal();
+    const c = bot.entity.position.floored().offset(dx * 3, 0, dz * 3);
     const r = 2;
     const h = 3;
+
+    // Collect target positions: walls bottom-up (with a doorway), then the roof.
+    const targets = [];
     for (let y = 0; y < h; y++) {
       for (let x = -r; x <= r; x++) {
         for (let z = -r; z <= r; z++) {
           if (Math.abs(x) !== r && Math.abs(z) !== r) continue; // perimeter walls only
-          if (z === -r && x === 0 && (y === 0 || y === 1)) continue; // leave a doorway
-          await placeBlockAt(c.offset(x, y, z));
+          if (z === -r && x === 0 && (y === 0 || y === 1)) continue; // doorway
+          targets.push(c.offset(x, y, z));
         }
       }
     }
-    for (let x = -r; x <= r; x++) {
-      for (let z = -r; z <= r; z++) {
-        await placeBlockAt(c.offset(x, h, z)); // roof
-      }
+    for (let x = -r; x <= r; x++) for (let z = -r; z <= r; z++) targets.push(c.offset(x, h, z)); // roof
+
+    let placed = 0;
+    let failed = 0;
+    for (const pos of targets) {
+      if (state.cancel) return null;
+      if (!placeableItem(BUILD_BLOCKS)) { failed++; continue; } // out of blocks
+      const err = await placeBlockAt(pos);
+      if (err) failed++; else placed++;
     }
+
+    // a torch inside for light
     try {
       const torch = bot.inventory.items().find((i) => i.name === 'torch');
       if (torch) {
         await bot.equip(torch, 'hand');
-        const ref = bot.blockAt(c.offset(1, -1, 1));
+        const ref = bot.blockAt(c.offset(0, -1, 0));
         if (ref && ref.boundingBox === 'block') await bot.placeBlock(ref, new Vec3(0, 1, 0));
       }
     } catch (e) { /* no torch yet */ }
+
+    say(`house done — placed ${placed} blocks${failed ? `, couldn't reach ${failed}` : ''}`);
     return null;
   }
 
