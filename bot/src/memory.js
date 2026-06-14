@@ -71,6 +71,9 @@ function getSupply() {
   return mem.supply;
 }
 
+function clearBase() { mem.base = null; save(); }
+function clearSupply() { mem.supply = null; save(); }
+
 function summary() {
   const parts = [];
   if (mem.home) parts.push(`home=(${mem.home.x},${mem.home.y},${mem.home.z})`);
@@ -78,4 +81,4 @@ function summary() {
   return parts.join(' | ') || 'nothing remembered yet';
 }
 
-module.exports = { add, setHome, getHome, setBase, getBase, setSpawn, getSpawn, setSupply, getSupply, summary, all: () => mem };
+module.exports = { add, setHome, getHome, setBase, getBase, clearBase, setSpawn, getSpawn, setSupply, getSupply, clearSupply, summary, all: () => mem };

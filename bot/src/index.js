@@ -108,6 +108,9 @@ function route(m, fallback) {
   }
 
   // --- base / spawn / op ---
+  if (/^(clear base|forget base|reset base)\b/.test(lm)) { memory.clearBase(); say('base cleared — the crew will stick near you until you "set base" again'); return; }
+  if (/^(clear supply|forget supply|reset supply)\b/.test(lm)) { memory.clearSupply(); say('supply chest cleared — tool_guy will set up a new one'); return; }
+  if (/^(reset (crew )?base|new game|reset memory)\b/.test(lm)) { memory.clearBase(); memory.clearSupply(); say('base + supply cleared — say "set base" to start fresh'); return; }
   if (/^(set base|base here|set depot)\b/.test(lm)) { setBaseAtOwner(); return; }
   if (/^(set supply|supply chest here|this is the supply chest|supply here|set supply chest)\b/.test(lm)) { setSupplyAtOwner(); return; }
   if (/^(set spawn|spawn here|set world ?spawn)\b/.test(lm)) { setSpawnAtOwner(); return; }
