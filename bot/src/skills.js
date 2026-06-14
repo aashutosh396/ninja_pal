@@ -345,6 +345,53 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
+  // Drop items on the ground where the pal is standing.
+  async function drop(itemName, count) {
+    const wanted = String(itemName || 'all').toLowerCase().trim();
+    const items = bot.inventory.items();
+    const matches = (wanted === 'all' || wanted === 'everything')
+      ? items
+      : items.filter((i) => resolveBlockNames(wanted).includes(i.name) || i.name === wanted);
+    if (!matches.length) return `i don't have any ${wanted}`;
+    let tossed = 0;
+    for (const it of matches) {
+      const n = count ? Math.min(count, it.count) : it.count;
+      try { await bot.toss(it.type, null, n); tossed += n; } catch (e) { /* skip */ }
+    }
+    return tossed ? null : `couldn't drop ${wanted}`;
+  }
+
+  // Deposit items into the nearest chest/barrel.
+  async function depositToChest(itemName, count) {
+    const mcData = require('minecraft-data')(bot.version);
+    const chestIds = ['chest', 'trapped_chest', 'barrel']
+      .map((n) => mcData.blocksByName[n] && mcData.blocksByName[n].id)
+      .filter((x) => x != null);
+    const chestBlock = bot.findBlock({ matching: chestIds, maxDistance: 16 });
+    if (!chestBlock) return "i don't see a chest nearby — drop it on the ground instead?";
+    try {
+      await bot.pathfinder.goto(new goals.GoalGetToBlock(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z));
+    } catch (e) { /* try to open anyway */ }
+    let chest;
+    try {
+      chest = await bot.openContainer(chestBlock);
+    } catch (e) {
+      return "couldn't open the chest";
+    }
+    const wanted = String(itemName || 'all').toLowerCase().trim();
+    const items = bot.inventory.items().filter(
+      (i) => wanted === 'all' || resolveBlockNames(wanted).includes(i.name) || i.name === wanted
+    );
+    let stored = 0;
+    for (const it of items) {
+      const n = count ? Math.min(count, it.count) : it.count;
+      try { await chest.deposit(it.type, null, n); stored += n; } catch (e) { /* full / mismatch */ }
+    }
+    try { chest.close(); } catch (e) { /* ignore */ }
+    if (!stored) return `nothing to store (no ${wanted})`;
+    return null;
+  }
+
   // ---- building -------------------------------------------------------------
 
   function placeableItem(preferred) {
@@ -807,6 +854,8 @@ function makeSkills(bot, config, state) {
     buildHouse,
     scout,
     wander,
+    drop,
+    depositToChest,
     tpToOwner,
     tpOwnerHere,
     HOSTILES,

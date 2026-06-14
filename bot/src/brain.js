@@ -41,6 +41,8 @@ const ACTIONS_DOC = `Actions you can plan (list them in the order they should ru
 - {"name":"get_tools"}                                chop wood and craft a full set of wooden tools (pickaxe, axe, sword). a ready-made multi-step routine.
 - {"name":"build","args":{"what":"shelter"}}         build something: "shelter" (box yourself in), "torch" (light the area), or "pillar" (tower up).
 - {"name":"give","args":{"item":"wood","count":10}}  walk to the owner and drop items. item can be "all" or a name/alias.
+- {"name":"deposit","args":{"item":"dirt","count":40}}  put items into the nearest chest/barrel
+- {"name":"drop","args":{"item":"dirt","count":40}}    drop items on the ground where you are
 - {"name":"attack"}                                  attack the nearest hostile mob (melee)
 - {"name":"shoot"}                                   shoot the nearest hostile with a bow (falls back to melee)
 - {"name":"mine","args":{"ore":"iron","count":3}}    mine a target ore (iron, coal, gold, diamond, …), tunnelling if needed

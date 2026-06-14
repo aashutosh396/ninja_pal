@@ -34,63 +34,40 @@ const state = {
 };
 const history = []; // recent chat turns fed back to the LLM for short-term memory
 
-const bot = mineflayer.createBot({
-  host: config.host || 'localhost',
-  port: config.port || 25565,
-  username: config.palName || 'Ninja',
-  // "auto" / blank => let mineflayer negotiate the version from the server (works 1.20.x–1.21.x).
-  version: (config.version && config.version !== 'auto') ? config.version : false,
-  auth: config.auth || 'offline',
-});
-
-bot.loadPlugin(pathfinder);
-bot.loadPlugin(pvp);
-bot.loadPlugin(collectBlock);
-
+let bot = null;
 let skills = null;
 let autonomy = null;
+let loopsStarted = false;
 
-bot.once('spawn', () => {
-  skills = makeSkills(bot, config, state);
-  autonomy = makeAutonomy(bot, skills, state, memory);
-  skills.setMovements();
-  console.log(`[Ninja Pal] ${bot.username} spawned. Owner=${config.owner}. brain=${resolveBackend(config)}. autonomous=${state.autonomous}. MC version=${bot.version}.`);
-  // Block-read sanity check — if this is 0 while standing near terrain, the MC version isn't
-  // parsed correctly (try a 1.20.4 world). findBlocks needs a moment after spawn.
-  setTimeout(() => {
-    try {
-      const solid = bot.findBlocks({ matching: (b) => b && b.boundingBox === 'block', maxDistance: 16, count: 200 }).length;
-      console.log(`[Ninja Pal] block-read check: ${solid} solid blocks within 16 (0 => world not parsing for MC ${bot.version})`);
-    } catch (e) { console.log('[Ninja Pal] block-read check failed:', e.message); }
-  }, 4000);
-  bot.chat(`hey ${config.owner}! im gonna do my own thing — say "follow me", "come", "stop", or "tp" anytime`);
+// Autonomy-loop bookkeeping (module scope so it survives reconnects).
+let autoLastGoal = null;
+let autoNoProgress = 0;
+let autoPausedUntil = 0;
+const invTotal = () => {
+  try { return bot.inventory.items().reduce((a, b) => a + b.count, 0); } catch (e) { return 0; }
+};
 
-  // Survival reflexes — always on, independent of what the pal is doing.
+// The always-on loops. Started ONCE; they idle while disconnected (skills/bot null) and pick
+// straight back up after a reconnect, so we never stack duplicate timers.
+function startLoops() {
+  if (loopsStarted) return;
+  loopsStarted = true;
+
+  // Survival reflexes — flee when low, then defend.
   setInterval(() => {
-    try {
-      skills.panicTick();  // flee/retreat takes priority when health is low
-      skills.defendTick();
-    } catch (e) {
-      /* ignore transient combat errors */
-    }
+    if (!skills || !bot || !bot.entity) return;
+    try { skills.panicTick(); skills.defendTick(); } catch (e) { /* transient */ }
   }, 1000);
 
-  // Stay fed (and thus self-heal via natural regen).
+  // Stay fed (self-heal via regen).
   setInterval(() => {
+    if (!skills) return;
     skills.eatTick().catch(() => {});
   }, 2500);
 
-  // Autonomy loop — advance one survival goal whenever the pal is free.
-  // Detects when it's making no progress (e.g. no trees in a desert) and pauses + asks the owner
-  // instead of spamming the same goal forever.
-  let autoLastGoal = null;
-  let autoNoProgress = 0;
-  let autoPausedUntil = 0;
-  const invTotal = () => {
-    try { return bot.inventory.items().reduce((a, b) => a + b.count, 0); } catch (e) { return 0; }
-  };
-
+  // Autonomy — advance one survival goal whenever free; back off + ask if it can't progress.
   setInterval(() => {
+    if (!skills || !autonomy || !bot || !bot.entity) return;
     if (!state.autonomous || state.busy || state.panicking || state.mode === 'follow') return;
     if (Date.now() < autoPausedUntil) return;
     state.busy = true;
@@ -104,15 +81,13 @@ bot.once('spawn', () => {
         state.goal = what || state.goal;
         if (what !== autoLastGoal) {
           autoLastGoal = what;
-          if (what) console.log('[Ninja Pal] auto:', what); // log only when the goal changes
+          if (what) console.log('[Ninja Pal] auto:', what);
         }
-        // Count steps that gained nothing (incl. fruitless exploring) — bounded so it eventually asks.
         const progressed = invTotal() !== before || (!hadHome && !!memory.getHome());
         autoNoProgress = progressed ? 0 : autoNoProgress + 1;
-        // ~8 fruitless steps (incl. wandering to search) before giving up and asking the owner.
         if (autoNoProgress >= 8) {
           autoNoProgress = 0;
-          autoPausedUntil = Date.now() + 90000; // back off 90s
+          autoPausedUntil = Date.now() + 90000;
           bot.chat(`i'm stuck trying to ${autoLastGoal || 'get going'} — nothing useful around here. tp me somewhere or tell me what to do`);
           console.log('[Ninja Pal] auto paused 90s (no progress)');
         }
@@ -120,16 +95,63 @@ bot.once('spawn', () => {
       .catch((e) => console.error('[Ninja Pal] auto error:', e.message))
       .finally(() => { state.busy = false; state.quiet = false; });
   }, 7000);
-});
+}
 
 function onMessage(username, message) {
-  if (username === bot.username) return;
+  if (!bot || username === bot.username) return;
   if (config.owner && username !== config.owner) return; // obey only the owner
   handle(message).catch((e) => console.error('[Ninja Pal] handle error:', e.message));
 }
 
-bot.on('chat', onMessage);      // public chat
-bot.on('whisper', onMessage);   // /msg, /tell, /w to the pal
+// Connect (and auto-reconnect) so it runs unattended.
+function connect() {
+  try {
+    bot = mineflayer.createBot({
+      host: config.host || 'localhost',
+      port: config.port || 25565,
+      username: config.palName || 'Ninja',
+      // "auto"/blank => negotiate the server version (1.20.x–1.21.x).
+      version: (config.version && config.version !== 'auto') ? config.version : false,
+      auth: config.auth || 'offline',
+    });
+  } catch (e) {
+    console.error('[Ninja Pal] createBot failed:', e.message, '— retrying in 8s');
+    setTimeout(connect, 8000);
+    return;
+  }
+
+  bot.loadPlugin(pathfinder);
+  bot.loadPlugin(pvp);
+  bot.loadPlugin(collectBlock);
+
+  bot.once('spawn', () => {
+    skills = makeSkills(bot, config, state);
+    autonomy = makeAutonomy(bot, skills, state, memory);
+    skills.setMovements();
+    console.log(`[Ninja Pal] ${bot.username} spawned. Owner=${config.owner}. brain=${resolveBackend(config)}. autonomous=${state.autonomous}. MC version=${bot.version}.`);
+    setTimeout(() => {
+      try {
+        const solid = bot.findBlocks({ matching: (b) => b && b.boundingBox === 'block', maxDistance: 16, count: 200 }).length;
+        console.log(`[Ninja Pal] block-read check: ${solid} solid blocks within 16 (0 => world not parsing for MC ${bot.version})`);
+      } catch (e) { console.log('[Ninja Pal] block-read check failed:', e.message); }
+    }, 4000);
+    bot.chat(`hey ${config.owner}! im doing my own thing — say "follow me", "come", "stop", "tp", or "status" anytime`);
+    startLoops();
+  });
+
+  bot.on('chat', onMessage);    // public chat
+  bot.on('whisper', onMessage); // /msg, /tell, /w
+  bot.on('death', () => { state.mode = 'idle'; try { bot.chat('oof i died, be right back'); } catch (e) {} });
+  bot.on('kicked', (reason) => console.log('[Ninja Pal] kicked:', reason));
+  bot.on('error', (err) => console.error('[Ninja Pal] error:', err.message));
+  bot.on('end', (reason) => {
+    console.log('[Ninja Pal] disconnected:', reason, '— reconnecting in 8s');
+    skills = null;
+    autonomy = null;
+    state.busy = false;
+    setTimeout(connect, 8000);
+  });
+}
 
 async function handle(message) {
   if (!skills) return;
@@ -199,6 +221,12 @@ async function handle(message) {
   state.cancel = false;
   state.busy = true;
   try {
+    if (/\b(deposit|store|stash|put .*\b(chest|barrel)|drop .*\b(chest|barrel))\b/.test(m)) {
+      return ack(await skills.depositToChest(itemFromText(m), countFromText(m)));
+    }
+    if (/\b(drop|throw away|toss|dump|get rid of)\b/.test(m)) {
+      return ack(await skills.drop(itemFromText(m), countFromText(m)));
+    }
     if (/^(get tools|make tools|tools)$/.test(m)) return ack(await skills.getTools());
     if (/^(shelter|build shelter|cover|hide)$/.test(m)) return ack(await skills.build('shelter'));
     if (/^(build house|build a house|house|make a house)$/.test(m)) return ack(await buildHouseAndRemember());
@@ -256,6 +284,8 @@ async function execute(action) {
     case 'build_house': return await buildHouseAndRemember();
     case 'scout': case 'find_wood': return await skills.scout();
     case 'explore': case 'wander': return await skills.wander();
+    case 'deposit': case 'store': return await skills.depositToChest(a.item || 'all', a.count);
+    case 'drop': case 'toss': return await skills.drop(a.item || 'all', a.count);
     case 'tp': return skills.tpToOwner();
     case 'tpme': return skills.tpOwnerHere();
     case 'work': case 'auto_on': state.autonomous = true; state.mode = 'idle'; return null;
@@ -286,13 +316,19 @@ function ack(err) {
   if (err) bot.chat(err);
 }
 
-bot.on('death', () => {
-  state.mode = 'idle';
-  bot.chat('oof i died, be right back');
-});
-bot.on('kicked', (reason) => console.log('[Ninja Pal] kicked:', reason));
-bot.on('error', (err) => console.error('[Ninja Pal] error:', err.message));
-bot.on('end', (reason) => {
-  console.log('[Ninja Pal] disconnected:', reason);
-  process.exit(0);
-});
+// Pull a resource name / a count out of a free-text command (for drop/deposit keywords).
+const RESOURCE_WORDS = ['dirt', 'cobblestone', 'stone', 'wood', 'logs', 'log', 'coal', 'iron', 'gold', 'diamond', 'sand', 'planks'];
+function itemFromText(m) {
+  const w = RESOURCE_WORDS.find((r) => new RegExp(`\\b${r}\\b`).test(m));
+  return w || 'all';
+}
+function countFromText(m) {
+  const n = m.match(/\b(\d{1,3})\b/);
+  return n ? parseInt(n[1], 10) : undefined;
+}
+
+// Keep the autonomous run alive through unexpected errors instead of crashing.
+process.on('unhandledRejection', (e) => console.error('[Ninja Pal] unhandledRejection:', e && e.message));
+process.on('uncaughtException', (e) => console.error('[Ninja Pal] uncaughtException:', e && e.message));
+
+connect();
