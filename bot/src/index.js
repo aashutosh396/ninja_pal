@@ -136,7 +136,7 @@ async function handle(message) {
   const m = message.toLowerCase().trim();
 
   // --- STATUS: report what it's doing (read-only, never blocked) ---
-  if (/^(status|what are you doing|wyd|what'?s your goal|whatcha doing|sup)$/.test(m)) {
+  if (/\bstatus\b|\bwyd\b|what('?s| is| are)\b.*\b(goal|doing|up to)\b|whatcha doing|how('?s| is) it going|how much .*done/.test(m)) {
     const where = state.autonomous
       ? `working on my own (${state.goal})`
       : (state.mode === 'follow' ? 'following you' : 'waiting for orders');
@@ -147,36 +147,55 @@ async function handle(message) {
     return;
   }
 
-  // --- INTERRUPT commands: always run instantly, even mid-task (they cancel the current job) ---
+  // --- CONTROL commands: relaxed matching (work inside sentences) + interrupt the current job ---
   // interrupt() cancels any running task + stops movement so the command takes over immediately.
   const interrupt = () => { state.cancel = true; bot.pathfinder.setGoal(null); if (bot.pvp) bot.pvp.stop(); };
 
-  if (/^(do your thing|go work|auto on|be free|go play|go|work)$/.test(m)) {
+  if (/\b(do your thing|go work|auto on|be free|go play|get back to work|keep working|carry on)\b/.test(m)) {
     interrupt(); state.autonomous = true; state.mode = 'idle'; bot.chat('cool, doing my own thing'); return;
   }
-  if (/^(auto off|manual|wait for me|stop working)$/.test(m)) {
+  if (/\b(auto off|wait for me|stop working|hold position|stand by)\b/.test(m)) {
     interrupt(); state.autonomous = false; skills.stop(); bot.chat('ok, ill wait for orders'); return;
   }
-  if (/^(follow me|follow|come with me|tag along)$/.test(m)) {
+  if (/\bfollow\b/.test(m)) {
     interrupt(); state.autonomous = false; return ack(skills.followOwner());
   }
-  if (/^(stop|stay|wait|halt|hold)$/.test(m)) {
+  if (/\btpme\b|\btp me\b|teleport me|bring me|warp me|pull me/.test(m)) {
+    interrupt(); skills.tpOwnerHere(); return;
+  }
+  if (/\btp\b|teleport|warp to me|come tp/.test(m)) {
+    interrupt(); skills.tpToOwner(); return;
+  }
+  if (/\b(stop|wait|halt|hold up|hold on|freeze|pause)\b/.test(m)) {
     interrupt(); state.autonomous = false; return ack(skills.stop());
   }
-  // "come" walks to you but KEEPS autonomy on — so it works wherever you led it (e.g. to a forest)
-  if (/^(come|come here|here|to me|come back|come to me)$/.test(m)) {
+  // "come" keeps autonomy on so it works wherever you led it (e.g. to a forest)
+  if (/\bcome\b|get over here|over here|to me\b/.test(m)) {
     interrupt(); return ack(skills.come());
   }
-  // teleport (needs the world's cheats on + the pal /op'd)
-  if (/^(tp|teleport|come tp|warp to me)$/.test(m)) { interrupt(); skills.tpToOwner(); return; }
-  if (/^(tpme|tp me|bring me|warp me)$/.test(m)) { skills.tpOwnerHere(); return; }
-  if (/^(defend|protect|guard)( me)?$/.test(m)) { state.autoDefend = true; bot.chat('got your back'); return; }
-  if (/^(stand down|chill|relax|peace)$/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat('ok, standing down'); return; }
-  if (/^(set home|sethome|home set)$/.test(m)) { memory.setHome(bot.entity.position); bot.chat('home set right here'); return; }
-  if (/^(go home|gohome|head home)$/.test(m)) { interrupt(); state.autonomous = false; return ack(goHome()); }
+  if (/\bgo home\b|head home|gohome/.test(m)) { interrupt(); state.autonomous = false; return ack(goHome()); }
+  if (/\bset home\b|sethome|make this home|home here/.test(m)) { memory.setHome(bot.entity.position); bot.chat('home set right here'); return; }
+  if (/\b(defend|protect|guard)\b/.test(m)) { state.autoDefend = true; bot.chat('got your back'); return; }
+  if (/\b(stand down|chill|relax|at ease)\b/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat('ok, standing down'); return; }
+
+  // --- BUSY: still chat back (no new task) so conversation flows while it works ---
+  if (state.busy) {
+    if (resolveBackend(config) === 'openai' && !config.apiKey) {
+      bot.chat('on it already — say "stop" or "come" to interrupt'); return;
+    }
+    try {
+      const { say } = await think(config, {
+        world: skills.perceive(), memories: memory.summary(),
+        ownerName: config.owner, message, history: history.slice(-8),
+      });
+      bot.chat(say || 'on it — say "stop" or "come" to interrupt');
+    } catch (e) {
+      bot.chat('on it already — say "stop" or "come" to interrupt');
+    }
+    return;
+  }
 
   // --- HEAVY tasks + LLM brain: one at a time ---
-  if (state.busy) { bot.chat('on it already — say "stop" or "come" to interrupt'); return; }
   state.cancel = false;
   state.busy = true;
   try {
