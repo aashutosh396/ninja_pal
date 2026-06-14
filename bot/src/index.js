@@ -73,17 +73,32 @@ function route(m, fallback) {
   const lm = m.toLowerCase();
   let mm;
 
-  // --- crew management ---
-  if (/^worker\s+roles\b/.test(lm)) { say(`roles → ${rolesList().join('  |  ')}`); return; }
-  if (/^worker\s+list\b/.test(lm)) {
-    const list = [...workers.values()].map((w) => `${w.name} (${w.def.role || w.def.job || 'idle'})`).join(', ');
-    say(`crew (${workers.size}/${MAX}): ${list || 'empty'}`);
+  // --- crew management (multi-line output for readability) ---
+  if (/^worker\s+roles\b/.test(lm) || /^roles$/.test(lm)) {
+    say('roles:');
+    for (const r of rolesList()) say(`- ${r}`);
+    return;
+  }
+  if (/^worker\s+list\b/.test(lm) || /^crew$/.test(lm)) {
+    say(`crew (${workers.size}/${MAX}):`);
+    if (!workers.size) say('- (empty) — worker create <name> <job>');
+    for (const w of workers.values()) {
+      const job = w.def.role || w.def.job || 'idle';
+      const chest = w.def.chest ? ` @ chest ${w.def.chest.x},${w.def.chest.y},${w.def.chest.z}` : '';
+      say(`- ${w.name}: ${job}${chest}`);
+    }
     return;
   }
   if ((mm = lm.match(/^worker\s+remove\s+(\S+)/))) { removeWorker(mm[1]); return; }
   if ((mm = m.match(/^worker\s+create\s+(\S+)\s+(.+)/i))) { createWorkerCmd(mm[1], mm[2]); return; }
-  if (/^worker\b/.test(lm)) {
-    say('usage: worker create <name> <job> | worker list | worker roles | worker remove <name>');
+  if (/^(worker|help|commands)\b/.test(lm)) {
+    say('commands:');
+    say('- worker create <name> <job>   (job = free text or a role)');
+    say('- worker list | worker roles | worker remove <name>');
+    say('- set base | set spawn | set op <name>');
+    say('- <name> <cmd>  |  all <cmd>  |  /msg <name> <cmd>');
+    say('- per worker: come/stop/follow/deposit/restock/this is your chest/clear chest/status');
+    say('- crew: "supplies are ready" | "everyone come deposit"');
     return;
   }
 

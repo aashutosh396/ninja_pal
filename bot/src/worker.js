@@ -252,8 +252,21 @@ function createWorker(config, def, manager) {
     if (/\bstatus\b|\bwyd\b|what('?s| is| are)\b.*\b(goal|doing|job)\b|how('?s| is) it going/.test(m)) {
       const where = state.mode === 'follow' ? 'following you' : (state.paused ? 'paused' : `on job (${state.goal})`);
       const p = bot.entity.position;
-      const chest = def.chest ? `${def.chest.x},${def.chest.y},${def.chest.z}` : '(shared base)';
-      bot.chat(`${name}: ${where} | hp ${Math.round(bot.health)} food ${Math.round(bot.food)} | at ${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)} | chest ${chest}`);
+      const chest = def.chest ? `${def.chest.x},${def.chest.y},${def.chest.z}` : 'shared base';
+      bot.chat(`${name} status:`);
+      bot.chat(`- ${where}`);
+      bot.chat(`- hp ${Math.round(bot.health)}/20, food ${Math.round(bot.food)}/20`);
+      bot.chat(`- at ${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)} | chest: ${chest}`);
+      bot.chat(`- supplies: ${skills.gearSummary()}`);
+      return;
+    }
+    if (/^(help|commands|what can you do)$/.test(m)) {
+      bot.chat(`${name} commands:`);
+      bot.chat('- come / stop / follow / go home');
+      bot.chat('- deposit (come dump at base) / restock (get supplies)');
+      bot.chat('- this is your chest / clear chest');
+      bot.chat('- mine <ore> / collect <block> / get tools / build house');
+      bot.chat('- status / defend / stand down');
       return;
     }
     if (/\b(do your thing|work|resume|continue|carry on|get back to work|keep working)\b/.test(m)) {

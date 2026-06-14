@@ -376,24 +376,27 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
-  // Dump LOOT into the nearest chest but keep tools/weapons/food so the worker can keep going.
+  // Dump LOOT into the nearest NON-supply chest(s), keeping tools/weapons/food. Overflow-safe.
   async function depositLoot() {
     const mcData = require('minecraft-data')(bot.version);
-    const chestIds = ['chest', 'trapped_chest', 'barrel']
-      .map((n) => mcData.blocksByName[n] && mcData.blocksByName[n].id)
-      .filter((x) => x != null);
-    const chestBlock = bot.findBlock({ matching: chestIds, maxDistance: 16 });
-    if (!chestBlock) return 'no chest at base';
-    try {
-      await bot.pathfinder.goto(new goals.GoalGetToBlock(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z));
-    } catch (e) { /* try anyway */ }
-    let chest;
-    try { chest = await bot.openContainer(chestBlock); } catch (e) { return "couldn't open base chest"; }
-    for (const it of bot.inventory.items()) {
-      if (isGear(it.name, mcData)) continue;
-      try { await chest.deposit(it.type, null, it.count); } catch (e) { /* full/mismatch */ }
+    const me = bot.entity.position;
+    const chests = scanChests(16)
+      .filter((c) => !/supply|tools|gear|items/.test(c.label))
+      .sort((a, b) => a.pos.distanceTo(me) - b.pos.distanceTo(me));
+    if (!chests.length) return 'no chest at base';
+    const lootLeft = () => bot.inventory.items().filter((it) => !isGear(it.name, mcData));
+    for (const c of chests) {
+      if (state.cancel || !lootLeft().length) break;
+      try {
+        await bot.pathfinder.goto(new goals.GoalGetToBlock(c.pos.x, c.pos.y, c.pos.z));
+        const chest = await bot.openContainer(bot.blockAt(c.pos));
+        for (const it of bot.inventory.items()) {
+          if (isGear(it.name, mcData)) continue;
+          try { await chest.deposit(it.type, null, it.count); } catch (e) { /* full */ }
+        }
+        try { chest.close(); } catch (e) { /* */ }
+      } catch (e) { /* */ }
     }
-    try { chest.close(); } catch (e) { /* */ }
     return null;
   }
 
@@ -521,9 +524,9 @@ function makeSkills(bot, config, state) {
     const mcData = require('minecraft-data')(bot.version);
     const chests = scanChests(24);
     if (!chests.length) return 'no chests at base';
-    const supply = chests.find((c) => /supply|tools|gear|items/.test(c.label));
-    const drops = chests.filter((c) => c !== supply);
-    if (!drops.length) return 'no deposit chest at base';
+    // NEVER deposit loot into a supply chest.
+    const drops = chests.filter((c) => !/supply|tools|gear|items/.test(c.label));
+    if (!drops.length) return 'no deposit chest at base (only supply?)';
 
     const isGeneric = (c) => !c.label || /deposit|loot|drop|store|misc|junk/.test(c.label);
     const lootLeft = () => bot.inventory.items().filter((it) => !isGear(it.name, mcData));
@@ -569,30 +572,52 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
-  // Withdraw missing tools (and a little food/torches) from the supply chest (sign: supply/tools).
+  // Withdraw ONLY what's needed from the supply chest (sign: supply/tools), up to a small target
+  // ("supply ratio") — e.g. up to 2 pickaxes, 1 axe/sword/shovel, a little food + torches.
   async function restockFromSupply() {
     const chests = scanChests(24);
     const supply = chests.find((c) => /supply|tools|gear|items/.test(c.label));
     if (!supply) return false;
     const mcData = require('minecraft-data')(bot.version);
-    const lacksTool = (kind) => !bot.inventory.items().some((i) => i.name.endsWith(`_${kind}`));
+    const countMine = (match) => bot.inventory.items().filter(match).reduce((a, b) => a + b.count, 0);
     try {
       await bot.pathfinder.goto(new goals.GoalGetToBlock(supply.pos.x, supply.pos.y, supply.pos.z));
       const chest = await bot.openContainer(bot.blockAt(supply.pos));
-      for (const item of chest.containerItems()) {
-        const toolKind = (item.name.match(/_(pickaxe|axe|sword|shovel|hoe)$/) || [])[1];
-        const isFood = mcData.foodsByName && mcData.foodsByName[item.name];
-        if (toolKind && lacksTool(toolKind)) {
-          try { await chest.withdraw(item.type, null, 1); } catch (e) { /* */ }
-        } else if (isFood && bot.food < 16) {
-          try { await chest.withdraw(item.type, null, Math.min(8, item.count)); } catch (e) { /* */ }
-        } else if (item.name === 'torch' && !bot.inventory.items().some((i) => i.name === 'torch')) {
-          try { await chest.withdraw(item.type, null, Math.min(16, item.count)); } catch (e) { /* */ }
+
+      // take up to `target` of items matching `match` (works on both inventory + chest items via .name)
+      const take = async (match, target) => {
+        let have = countMine(match);
+        for (const item of chest.containerItems()) {
+          if (have >= target) break;
+          if (match(item)) {
+            try { await chest.withdraw(item.type, null, Math.min(target - have, item.count)); } catch (e) { /* */ }
+            have = countMine(match);
+          }
         }
-      }
+      };
+
+      await take((i) => i.name.endsWith('_pickaxe'), 2);
+      await take((i) => i.name.endsWith('_sword'), 1);
+      await take((i) => i.name.endsWith('_axe'), 1);
+      await take((i) => i.name.endsWith('_shovel'), 1);
+      if (bot.food < 16) await take((i) => mcData.foodsByName && mcData.foodsByName[i.name], 8);
+      await take((i) => i.name === 'torch', 16);
+
       try { chest.close(); } catch (e) { /* */ }
     } catch (e) { return false; }
     return true;
+  }
+
+  // A short summary of the gear/supplies the worker is carrying (for status).
+  function gearSummary() {
+    const mcData = require('minecraft-data')(bot.version);
+    const counts = {};
+    for (const it of bot.inventory.items()) {
+      if (!isGear(it.name, mcData)) continue;
+      counts[it.name] = (counts[it.name] || 0) + it.count;
+    }
+    const parts = Object.entries(counts).map(([n, c]) => `${c} ${n}`);
+    return parts.length ? parts.join(', ') : 'none';
   }
 
   // ---- building -------------------------------------------------------------
@@ -1062,6 +1087,7 @@ function makeSkills(bot, config, state) {
     depositLoot,
     depositLabeled,
     restockFromSupply,
+    gearSummary,
     scanChests,
     tpTo,
     farm,
