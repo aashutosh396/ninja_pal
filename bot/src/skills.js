@@ -322,21 +322,15 @@ function makeSkills(bot, config, state) {
     try {
       await bot.lookAt(door.position.offset(0.5, 0.5, 0.5), true);
       await bot.activateBlock(door);
-      // walk through: stop pathing, push forward past the doorway, then resume.
-      try { bot.pathfinder.setGoal(null); } catch (e) { /* */ }
-      const me = bot.entity.position;
-      const dp = door.position.offset(0.5, 0, 0.5);
-      const len = Math.hypot(dp.x - me.x, dp.z - me.z) || 1;
-      const tx = dp.x + ((dp.x - me.x) / len) * 1.6;
-      const tz = dp.z + ((dp.z - me.z) / len) * 1.6;
-      await bot.lookAt(new Vec3(tx, me.y + 1.5, tz), true);
-      bot.setControlState('forward', true);
-      await new Promise((r) => setTimeout(r, 1100));
-      bot.setControlState('forward', false);
-    } catch (e) {
-      try { bot.setControlState('forward', false); } catch (_) { /* */ }
-    } finally {
-      if (goal) { try { bot.pathfinder.setGoal(goal, true); } catch (e) { /* */ } } // resume through the open door
+      // Now that it's open, walk to the block just past the doorway (pathfinder routes through it).
+      const me = bot.entity.position.floored();
+      const d = door.position;
+      const sx = Math.sign(d.x - me.x);
+      const sz = Math.sign(d.z - me.z);
+      const far = { x: d.x + (sx || 0), y: me.y, z: d.z + (sz || 0) };
+      await bot.pathfinder.goto(new goals.GoalBlock(far.x, far.y, far.z));
+    } catch (e) { /* */ } finally {
+      if (goal) { try { bot.pathfinder.setGoal(goal, true); } catch (e) { /* */ } } // resume original route
       doorBusy = false;
     }
   }
