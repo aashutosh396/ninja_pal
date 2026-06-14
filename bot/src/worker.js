@@ -239,6 +239,18 @@ function createWorker(config, def, manager) {
   // Logistics/foreman: bootstrap the supply chest (adopt an existing one, else build it), then
   // keep it stocked with tools + food and keep the crew working.
   async function runLogistics() {
+    // --- no base yet: go to the owner and STAY NEAR them, ask for a base ---
+    if (!memory.getBase()) {
+      const o = skills.findOwner();
+      if (o) { try { bot.pathfinder.setGoal(new goals.GoalFollow(o, 3), true); } catch (e) { /* */ } }
+      state.goal = 'waiting for a base (staying near you)';
+      if (Date.now() - lastNudge > 30000) {
+        lastNudge = Date.now();
+        bot.chat(`${name}: no base yet — i'm staying with you. say "set base" where you want the base`);
+      }
+      return;
+    }
+
     // --- bootstrap: make sure there's a supply chest ---
     if (!memory.getSupply()) {
       await idleAtBase(); // get to base so we can see the local chests
