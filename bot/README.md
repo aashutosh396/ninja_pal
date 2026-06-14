@@ -114,6 +114,36 @@ bot/
 - Auto-defense runs on a 1 s loop independent of the LLM, so the pal reacts to mobs instantly.
 - Your API key lives only in `config.json`, which is gitignored — never committed.
 
+## Crew — named workers (multi-bot)
+
+Spawn a crew of named worker bots, each doing a job on repeat. Commands are typed in **normal
+chat (no slash)**:
+
+```
+worker create Digger collect dirt and fill the nearest chest
+worker create Bob mine iron and put it in the chest
+worker create Max guard            (a preset role)
+worker list                        who's in the crew + their jobs
+worker roles                       list the preset roles
+worker remove Bob                  dismiss a worker
+```
+
+Command them:
+```
+Bob come              one worker
+Bob deposit dirt
+all follow me         the whole crew
+<command>             (no name) goes to the first worker
+```
+
+- A worker's **job** is free text ("collect wood and fill the chest") or a **preset role**
+  (`guard`, `lumberjack`, `miner`, `digger`, `miner_stone`, `hunter`, `survivor`, `idle`).
+- Simple gather jobs run reliably (gather → open the nearest chest → deposit → repeat).
+  Open-ended jobs fall back to the Claude brain.
+- The crew is saved to `workers.json` and **respawns automatically** on restart.
+- Cap with `maxWorkers` in config (default 5) — more bots = more lag + more brain calls.
+- First run with no `workers.json` spawns one `survivor` named after `palName`.
+
 ## Memory & home
 
 The pal remembers across restarts (in `memory.json`, gitignored):

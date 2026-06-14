@@ -5,6 +5,7 @@
   "auth": "offline",
   "palName": "Ninja",
   "owner": "YourMinecraftUsername",
+  "maxWorkers": 5,
 
   "backend": "claude",
   "claudeModel": "claude-sonnet-4-6",

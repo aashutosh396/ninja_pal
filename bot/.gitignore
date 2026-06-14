@@ -3,3 +3,4 @@ config.json
 memory.json
 npm-debug.log*
 *.log
+workers.json
