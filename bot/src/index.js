@@ -53,7 +53,15 @@ bot.once('spawn', () => {
   skills = makeSkills(bot, config, state);
   autonomy = makeAutonomy(bot, skills, state, memory);
   skills.setMovements();
-  console.log(`[Ninja Pal] ${bot.username} spawned. Owner=${config.owner}. brain=${resolveBackend(config)}. autonomous=${state.autonomous}.`);
+  console.log(`[Ninja Pal] ${bot.username} spawned. Owner=${config.owner}. brain=${resolveBackend(config)}. autonomous=${state.autonomous}. MC version=${bot.version}.`);
+  // Block-read sanity check — if this is 0 while standing near terrain, the MC version isn't
+  // parsed correctly (try a 1.20.4 world). findBlocks needs a moment after spawn.
+  setTimeout(() => {
+    try {
+      const solid = bot.findBlocks({ matching: (b) => b && b.boundingBox === 'block', maxDistance: 16, count: 200 }).length;
+      console.log(`[Ninja Pal] block-read check: ${solid} solid blocks within 16 (0 => world not parsing for MC ${bot.version})`);
+    } catch (e) { console.log('[Ninja Pal] block-read check failed:', e.message); }
+  }, 4000);
   bot.chat(`hey ${config.owner}! im gonna do my own thing — say "follow me", "come", "stop", or "tp" anytime`);
 
   // Survival reflexes — always on, independent of what the pal is doing.
