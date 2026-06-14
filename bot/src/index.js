@@ -10,6 +10,7 @@ const { pathfinder } = require('mineflayer-pathfinder');
 const { plugin: pvp } = require('mineflayer-pvp');
 const collectBlock = require('mineflayer-collectblock').plugin;
 const { makeSkills } = require('./skills');
+const { makeAutonomy } = require('./autonomy');
 const { think, resolveBackend } = require('./brain');
 const memory = require('./memory');
 
@@ -21,7 +22,13 @@ if (!fs.existsSync(cfgPath)) {
 }
 const config = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
 
-const state = { mode: 'idle', autoDefend: true, panicking: false };
+const state = {
+  mode: 'idle',
+  autoDefend: true,
+  panicking: false,
+  autonomous: config.autonomous !== false, // default ON — the pal plays by itself
+  busy: false, // a task is currently running (lock so auto + manual don't collide)
+};
 const history = []; // recent chat turns fed back to the LLM for short-term memory
 
 const bot = mineflayer.createBot({
@@ -38,13 +45,16 @@ bot.loadPlugin(pvp);
 bot.loadPlugin(collectBlock);
 
 let skills = null;
+let autonomy = null;
 
 bot.once('spawn', () => {
   skills = makeSkills(bot, config, state);
+  autonomy = makeAutonomy(bot, skills, state, memory);
   skills.setMovements();
-  console.log(`[Ninja Pal] ${bot.username} spawned. Owner=${config.owner}. brain=${resolveBackend(config)}. follow+auto-defend on.`);
-  bot.chat(`hey ${config.owner}, im here! say "follow me", "stop", "come", or just talk to me`);
+  console.log(`[Ninja Pal] ${bot.username} spawned. Owner=${config.owner}. brain=${resolveBackend(config)}. autonomous=${state.autonomous}.`);
+  bot.chat(`hey ${config.owner}! im gonna do my own thing — say "follow me", "come", "stop", or "tp" anytime`);
 
+  // Survival reflexes — always on, independent of what the pal is doing.
   setInterval(() => {
     try {
       skills.panicTick();  // flee/retreat takes priority when health is low
@@ -59,40 +69,70 @@ bot.once('spawn', () => {
     skills.eatTick().catch(() => {});
   }, 2500);
 
-  // start by tagging along if the owner is in sight
-  setTimeout(() => {
-    if (state.mode === 'idle') skills.followOwner();
-  }, 2500);
+  // Autonomy loop — advance one survival goal whenever the pal is free.
+  setInterval(() => {
+    if (!state.autonomous || state.busy || state.panicking || state.mode === 'follow') return;
+    state.busy = true;
+    autonomy
+      .step()
+      .then((what) => { if (what) console.log('[Ninja Pal] auto:', what); })
+      .catch((e) => console.error('[Ninja Pal] auto error:', e.message))
+      .finally(() => { state.busy = false; });
+  }, 6000);
 });
 
-bot.on('chat', (username, message) => {
+function onMessage(username, message) {
   if (username === bot.username) return;
-  if (config.owner && username !== config.owner) return; // Phase 2: obey only the owner
+  if (config.owner && username !== config.owner) return; // obey only the owner
   handle(message).catch((e) => console.error('[Ninja Pal] handle error:', e.message));
-});
+}
+
+bot.on('chat', onMessage);      // public chat
+bot.on('whisper', onMessage);   // /msg, /tell, /w to the pal
 
 async function handle(message) {
   if (!skills) return;
   const m = message.toLowerCase().trim();
 
-  // Fast path — direct keywords, no LLM round-trip.
-  if (/^(follow me|follow|come with me|tag along)$/.test(m)) return ack(skills.followOwner());
-  if (/^(stop|stay|wait|halt|hold)$/.test(m)) return ack(skills.stop());
-  if (/^(come|come here|here|to me)$/.test(m)) return ack(skills.come());
-  if (/^(defend|protect|guard)( me)?$/.test(m)) { state.autoDefend = true; bot.chat('got your back'); return; }
-  if (/^(stand down|chill|relax|peace)$/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat('ok, standing down'); return; }
-  if (/^(get tools|make tools|tools)$/.test(m)) return ack(await skills.getTools());
-  if (/^(shelter|build shelter|cover|hide)$/.test(m)) return ack(await skills.build('shelter'));
-  if (/^(set home|sethome|home set)$/.test(m)) { memory.setHome(bot.entity.position); bot.chat('home set right here'); return; }
-  if (/^(go home|gohome|head home)$/.test(m)) return ack(goHome());
+  // --- autonomy + movement toggles (these change how the pal behaves) ---
+  if (/^(do your thing|go work|auto on|be free|go play|work)$/.test(m)) {
+    state.autonomous = true; state.mode = 'idle'; bot.chat('cool, doing my own thing'); return;
+  }
+  if (/^(auto off|manual|wait for me|stop working)$/.test(m)) {
+    state.autonomous = false; bot.chat('ok, ill wait for orders'); return;
+  }
+  if (/^(follow me|follow|come with me|tag along)$/.test(m)) {
+    state.autonomous = false; return ack(skills.followOwner());
+  }
+  if (/^(stop|stay|wait|halt|hold)$/.test(m)) {
+    state.autonomous = false; return ack(skills.stop());
+  }
+  // teleport (needs the world's cheats on + the pal /op'd)
+  if (/^(tp|teleport|come tp|warp to me)$/.test(m)) { skills.tpToOwner(); return; }
+  if (/^(tpme|tp me|bring me|warp me)$/.test(m)) { skills.tpOwnerHere(); return; }
 
-  // Everything else -> the LLM brain (chat + optional action).
-  // Only the OpenAI backend needs a key; the Claude backend uses the local CLI login.
-  if (resolveBackend(config) === 'openai' && !config.apiKey) {
-    bot.chat("(no api key set — i can still do: follow, stop, come, defend, get tools, shelter)");
+  // --- one-shot commands (don't disable autonomy; they run then it resumes) ---
+  if (state.busy && /^(come|defend|guard|get tools|tools|shelter|build house|house|go home)/.test(m)) {
+    bot.chat('busy right now, one sec');
     return;
   }
+  state.busy = true;
   try {
+    if (/^(come|come here|here|to me)$/.test(m)) return ack(skills.come());
+    if (/^(defend|protect|guard)( me)?$/.test(m)) { state.autoDefend = true; bot.chat('got your back'); return; }
+    if (/^(stand down|chill|relax|peace)$/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat('ok, standing down'); return; }
+    if (/^(get tools|make tools|tools)$/.test(m)) return ack(await skills.getTools());
+    if (/^(shelter|build shelter|cover|hide)$/.test(m)) return ack(await skills.build('shelter'));
+    if (/^(build house|build a house|house|make a house)$/.test(m)) return ack(await buildHouseAndRemember());
+    if (/^(set home|sethome|home set)$/.test(m)) { memory.setHome(bot.entity.position); bot.chat('home set right here'); return; }
+    if (/^(go home|gohome|head home)$/.test(m)) return ack(goHome());
+
+    // Everything else -> the LLM brain (chat + optional multi-step plan).
+    // Only the OpenAI backend needs a key; the Claude backend uses the local CLI login.
+    if (resolveBackend(config) === 'openai' && !config.apiKey) {
+      bot.chat("(no api key — i can still do: follow, come, defend, get tools, build house, tp)");
+      return;
+    }
     const { say, actions } = await think(config, {
       world: skills.perceive(),
       memories: memory.summary(),
@@ -105,17 +145,15 @@ async function handle(message) {
       bot.chat(say);
       history.push({ role: 'assistant', content: say });
     }
-    // Run the plan in order; stop early if a step reports it can't proceed.
     for (const action of actions) {
       const err = await execute(action);
-      if (err) {
-        bot.chat(err);
-        break;
-      }
+      if (err) { bot.chat(err); break; }
     }
   } catch (e) {
-    console.error('[Ninja Pal] brain:', e.message);
+    console.error('[Ninja Pal] handle:', e.message);
     bot.chat('uh my brain glitched, say that again?');
+  } finally {
+    state.busy = false;
   }
 }
 
@@ -136,12 +174,26 @@ async function execute(action) {
     case 'give': return await skills.giveToOwner(a.item || 'all', a.count);
     case 'shoot': return await skills.rangedAttackNearest();
     case 'mine': return await skills.mineOre(a.ore || a.block || 'iron', a.count || 1);
+    case 'hunt': return await skills.hunt();
+    case 'build_house': return await buildHouseAndRemember();
+    case 'explore': case 'wander': return await skills.wander();
+    case 'tp': return skills.tpToOwner();
+    case 'tpme': return skills.tpOwnerHere();
+    case 'work': case 'auto_on': state.autonomous = true; state.mode = 'idle'; return null;
+    case 'auto_off': state.autonomous = false; return null;
     case 'goto': return skills.gotoCoord(Number(a.x), Number(a.y), Number(a.z));
     case 'sethome': memory.setHome(bot.entity.position); return null;
     case 'gohome': return goHome();
     case 'remember': memory.add(a.note); return null;
     default: return null;
   }
+}
+
+// Build a house and remember where it is (so "go home" works afterwards).
+async function buildHouseAndRemember() {
+  const err = await skills.buildHouse();
+  if (!err) memory.setHome(bot.entity.position);
+  return err;
 }
 
 // Walk back to the saved home position, if one exists.

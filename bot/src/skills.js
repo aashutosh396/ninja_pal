@@ -139,27 +139,64 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
+  // Equip the right tool for a block (axe for wood, pickaxe for stone/ore) — best tier owned.
+  async function equipForBlock(block) {
+    const n = block.name;
+    const kind =
+      n.endsWith('_log') || n.includes('wood') || n.endsWith('_planks') || n.includes('leaves')
+        ? '_axe'
+        : '_pickaxe';
+    const order =
+      kind === '_pickaxe'
+        ? ['netherite_pickaxe', 'diamond_pickaxe', 'iron_pickaxe', 'stone_pickaxe', 'wooden_pickaxe']
+        : ['netherite_axe', 'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe'];
+    const items = bot.inventory.items();
+    for (const name of order) {
+      const it = items.find((i) => i.name === name);
+      if (it) {
+        try { await bot.equip(it, 'hand'); } catch (e) { /* ignore */ }
+        return;
+      }
+    }
+  }
+
+  // Find one matching block, path right up to it, equip the right tool, and dig it.
+  // Returns 'ok' | 'none' (nothing in view) | 'cantbreak' (wrong tool) | 'fail' (path/dig error).
+  async function digNearest(ids, label, maxDistance = 64) {
+    const block = bot.findBlock({ matching: ids, maxDistance });
+    if (!block) return 'none';
+    try {
+      await bot.pathfinder.goto(new goals.GoalGetToBlock(block.position.x, block.position.y, block.position.z));
+      await equipForBlock(block);
+      if (!bot.canDigBlock(block)) return 'cantbreak';
+      await bot.dig(block);
+      try {
+        await bot.pathfinder.goto(new goals.GoalNear(block.position.x, block.position.y, block.position.z, 0));
+      } catch (e) { /* scoop the drop */ }
+      return 'ok';
+    } catch (e) {
+      console.error(`[Ninja Pal] dig fail (${label}):`, e.message);
+      return 'fail';
+    }
+  }
+
   async function collect(blockName, count = 1) {
     const mcData = require('minecraft-data')(bot.version);
     const ids = resolveBlockNames(blockName)
       .map((n) => mcData.blocksByName[n] && mcData.blocksByName[n].id)
       .filter((x) => x != null);
     if (!ids.length) return `i don't know how to collect "${blockName}"`;
-
     const want = Math.max(1, Math.min(count | 0 || 1, 16));
+    bot.chat(`getting ${want} ${blockName}`);
     let got = 0;
-    for (let i = 0; i < want; i++) {
-      const block = bot.findBlock({ matching: ids, maxDistance: 64 });
-      if (!block) break;
-      try {
-        await bot.collectBlock.collect(block);
-        got++;
-      } catch (e) {
-        break;
-      }
+    let miss = 0;
+    while (got < want && miss < 3) {
+      const r = await digNearest(ids, blockName);
+      if (r === 'ok') { got++; continue; }
+      if (r === 'cantbreak') return `i can't break ${blockName} with my tools`;
+      miss++;
     }
-    if (got === 0) return `couldn't find any ${blockName} nearby`;
-    return null;
+    return got > 0 ? null : `couldn't find any ${blockName} nearby`;
   }
 
   function gotoCoord(x, y, z) {
@@ -499,8 +536,9 @@ function makeSkills(bot, config, state) {
   // Mine a target ore: grab it if it's in range, otherwise tunnel to expose more ground.
   async function mineOre(oreName, count = 1) {
     if (!(await ensurePickaxe())) {
+      bot.chat('no pickaxe yet, making one first');
       const e = await getTools(); // make a wooden pickaxe first
-      if (!(await ensurePickaxe())) return e || 'i need a pickaxe to mine that';
+      if (!(await ensurePickaxe())) return e || "i couldn't make a pickaxe (need trees/wood nearby)";
     }
     const mcData = require('minecraft-data')(bot.version);
     const ids = resolveBlockNames(oreName)
@@ -509,13 +547,13 @@ function makeSkills(bot, config, state) {
     if (!ids.length) return `i don't know the ore "${oreName}"`;
 
     const want = Math.max(1, Math.min(count | 0 || 1, 16));
+    bot.chat(`mining ${want} ${oreName}`);
     let got = 0;
-    for (let cycle = 0; cycle < 10 && got < want; cycle++) {
-      const block = bot.findBlock({ matching: ids, maxDistance: 48 });
-      if (block) {
-        try { await bot.collectBlock.collect(block); got++; continue; } catch (e) { /* fall through */ }
-      }
-      await tunnelForward(6); // dig deeper / further and look again
+    for (let cycle = 0; cycle < 14 && got < want; cycle++) {
+      const r = await digNearest(ids, oreName, 48);
+      if (r === 'ok') { got++; continue; }
+      if (r === 'cantbreak') return `i can't break ${oreName} — i need a better pickaxe`;
+      await tunnelForward(6); // none in view / blocked -> expose more ground
     }
     if (!got) return `couldn't reach any ${oreName} (tried tunnelling)`;
     return null;
@@ -551,6 +589,90 @@ function makeSkills(bot, config, state) {
     }
   }
 
+  // ---- foraging, housing, exploring, teleport -------------------------------
+
+  const PREY = new Set(['cow', 'pig', 'chicken', 'sheep', 'rabbit', 'mooshroom']);
+
+  function isNight() {
+    const t = (bot.time && bot.time.timeOfDay) || 0;
+    return t > 13000 && t < 23000;
+  }
+
+  // Hunt the nearest passive animal for food, then step onto the drops.
+  async function hunt() {
+    const prey = bot.nearestEntity(
+      (e) => PREY.has(e.name) && e.position && e.position.distanceTo(bot.entity.position) < 32
+    );
+    if (!prey) return 'no animals around to hunt';
+    const at = prey.position.clone();
+    equipBestWeapon();
+    bot.pvp.attack(prey);
+    for (let i = 0; i < 40 && prey.isValid; i++) await new Promise((r) => setTimeout(r, 300));
+    if (bot.pvp) bot.pvp.stop();
+    try { await bot.pathfinder.goto(new goals.GoalNear(at.x, at.y, at.z, 0)); } catch (e) { /* drop pickup */ }
+    return null;
+  }
+
+  // Build a small enclosed house (5x5, 3 high, doorway + roof + a torch inside).
+  async function buildHouse() {
+    const names = ['cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'granite', 'cobbled_deepslate'];
+    const have = () => bot.inventory.items().filter((i) => names.includes(i.name)).reduce((a, b) => a + b.count, 0);
+    if (have() < 50) {
+      bot.chat('gathering blocks for a house');
+      await mineOre('stone', 16);
+      if (have() < 40) await collect('dirt', 16);
+    }
+    if (have() < 20) return "couldn't get enough blocks for a house";
+
+    bot.chat('building us a house');
+    const c = bot.entity.position.floored();
+    const r = 2;
+    const h = 3;
+    for (let y = 0; y < h; y++) {
+      for (let x = -r; x <= r; x++) {
+        for (let z = -r; z <= r; z++) {
+          if (Math.abs(x) !== r && Math.abs(z) !== r) continue; // perimeter walls only
+          if (z === -r && x === 0 && (y === 0 || y === 1)) continue; // leave a doorway
+          await placeBlockAt(c.offset(x, y, z));
+        }
+      }
+    }
+    for (let x = -r; x <= r; x++) {
+      for (let z = -r; z <= r; z++) {
+        await placeBlockAt(c.offset(x, h, z)); // roof
+      }
+    }
+    try {
+      const torch = bot.inventory.items().find((i) => i.name === 'torch');
+      if (torch) {
+        await bot.equip(torch, 'hand');
+        const ref = bot.blockAt(c.offset(1, -1, 1));
+        if (ref && ref.boundingBox === 'block') await bot.placeBlock(ref, new Vec3(0, 1, 0));
+      }
+    } catch (e) { /* no torch yet */ }
+    return null;
+  }
+
+  // Wander to a random nearby spot to explore.
+  async function wander() {
+    const p = bot.entity.position;
+    const ang = Math.random() * Math.PI * 2;
+    const dx = Math.round(Math.cos(ang) * 10);
+    const dz = Math.round(Math.sin(ang) * 10);
+    try { await bot.pathfinder.goto(new goals.GoalNear(p.x + dx, p.y, p.z + dz, 2)); } catch (e) { /* blocked */ }
+    return null;
+  }
+
+  // Teleport via server command (needs the world's cheats on + the pal /op'd).
+  function tpToOwner() {
+    bot.chat(`/tp ${bot.username} ${config.owner}`);
+    return null;
+  }
+  function tpOwnerHere() {
+    bot.chat(`/tp ${config.owner} ${bot.username}`);
+    return null;
+  }
+
   return {
     findOwner,
     inventorySummary,
@@ -577,6 +699,12 @@ function makeSkills(bot, config, state) {
     mineOre,
     tunnelForward,
     panicTick,
+    isNight,
+    hunt,
+    buildHouse,
+    wander,
+    tpToOwner,
+    tpOwnerHere,
     HOSTILES,
   };
 }
