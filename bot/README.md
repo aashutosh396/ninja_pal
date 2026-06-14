@@ -28,6 +28,10 @@ LLM brain). It shows up in the player list, has a body, and plays alongside you:
 - **Node.js 18+** (uses built-in `fetch`).
 - Your world **Open to LAN** (singleplayer) or a Minecraft server. Works with TLauncher via
   offline mode.
+- **Minecraft version:** any from **1.20.x through 1.21.x** (incl. 1.21.11). Leave
+  `"version": "auto"` and the bot negotiates the server's version automatically; or pin an
+  exact version string if you prefer. (The Fabric `/spawn` mod at the repo root is separate and
+  is built for 1.20.4 only.)
 - A **brain** (see below). The default is your **local Claude Max** login — no API key, no
   per-token cost.
 

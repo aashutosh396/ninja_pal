@@ -28,7 +28,8 @@ const bot = mineflayer.createBot({
   host: config.host || 'localhost',
   port: config.port || 25565,
   username: config.palName || 'Ninja',
-  version: config.version || '1.20.4',
+  // "auto" / blank => let mineflayer negotiate the version from the server (works 1.20.x–1.21.x).
+  version: (config.version && config.version !== 'auto') ? config.version : false,
   auth: config.auth || 'offline',
 });
 
