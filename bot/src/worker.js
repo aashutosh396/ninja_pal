@@ -89,9 +89,15 @@ function createWorker(config, def, manager) {
     state.busy = true;
     state.cancel = false;
     try {
-      // When the bag is filling, run loot to MY chest (if assigned) else the shared base.
       const spot = def.chest || memory.getBase();
-      if (spot && bot.inventory.emptySlotCount() <= 6) {
+      const mcData = require('minecraft-data')(bot.version);
+      const hasFood = bot.inventory.items().some((i) => mcData.foodsByName[i.name]);
+      // Self-care: hungry with no food -> go to base to restock (and drop loot while there).
+      if (spot && bot.food <= 7 && !hasFood) {
+        state.goal = 'low on food, heading to base';
+        await baseRun(spot);
+      } else if (spot && bot.inventory.emptySlotCount() <= 6) {
+        // Bag filling -> loot run to MY chest (if assigned) else the shared base.
         await baseRun(spot);
       } else {
         await runJob();
@@ -99,6 +105,39 @@ function createWorker(config, def, manager) {
     } finally {
       state.busy = false;
     }
+  }
+
+  // Stop the current job and stop moving (used by interrupt commands).
+  function interrupt() {
+    state.cancel = true;
+    try { bot.pathfinder.setGoal(null); } catch (e) { /* */ }
+    if (bot.pvp) bot.pvp.stop();
+  }
+
+  // Come to base NOW and drop off everything (then restock). For "come deposit" / "unload".
+  async function comeDeposit() {
+    const spot = def.chest || memory.getBase();
+    if (!spot) { bot.chat(`${name}: no base set — stand by a chest and say "set base"`); return; }
+    interrupt();
+    state.busy = true;
+    try { await baseRun(spot); bot.chat(`${name}: dropped everything off at base`); }
+    catch (e) { log('deposit err:', e.message); }
+    finally { state.busy = false; }
+  }
+
+  // Come to base and take supplies (tools/food). For "restock" / "supplies ready".
+  async function comeRestock() {
+    const spot = def.chest || memory.getBase();
+    if (!spot) { bot.chat(`${name}: no base set`); return; }
+    interrupt();
+    state.busy = true;
+    try {
+      state.goal = 'getting supplies';
+      try { await bot.pathfinder.goto(new goals.GoalNear(spot.x, spot.y, spot.z, 2)); }
+      catch (e) { skills.tpTo(spot.x, spot.y, spot.z); await new Promise((r) => setTimeout(r, 1500)); }
+      const ok = await skills.restockFromSupply();
+      bot.chat(`${name}: ${ok ? 'grabbed supplies' : 'no supply chest found at base'}`);
+    } finally { state.busy = false; }
   }
 
   async function baseRun(spot) {
@@ -191,8 +230,15 @@ function createWorker(config, def, manager) {
   async function handle(message) {
     if (!skills) return;
     const m = String(message).toLowerCase().trim();
-    const interrupt = () => { state.cancel = true; try { bot.pathfinder.setGoal(null); } catch (e) {} if (bot.pvp) bot.pvp.stop(); };
     const ack = (err) => { if (err) bot.chat(err); };
+
+    // come to base + drop everything / go take supplies (these interrupt the current job)
+    if (/\b(unload|drop off|come deposit|deposit everything|deposit all|to base|deposit at base)\b/.test(m) || /^(deposit|return)$/.test(m)) {
+      await comeDeposit(); return;
+    }
+    if (/\b(restock|resupply|get supplies|grab supplies|take supplies|need supplies|supplies ready|come get)\b/.test(m)) {
+      await comeRestock(); return;
+    }
 
     if (/\bstatus\b|\bwyd\b|what('?s| is| are)\b.*\b(goal|doing|job)\b|how('?s| is) it going/.test(m)) {
       const where = state.mode === 'follow' ? 'following you' : (state.paused ? 'paused' : `on job (${state.goal})`);

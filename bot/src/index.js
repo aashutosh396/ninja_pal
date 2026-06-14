@@ -101,6 +101,18 @@ function route(m, fallback) {
     return;
   }
 
+  // --- crew-wide natural phrases ---
+  if (/supplies?\s*(are\s*)?ready|come get supplies|(everyone|all)\s+restock|restock (everyone|all)/.test(lm)) {
+    for (const w of workers.values()) w.handle('restock');
+    say('crew: supplies are ready — come grab tools/food');
+    return;
+  }
+  if (/(everyone|all)\b.*\b(deposit|unload|come|return|to base)\b|come to base|drop everything/.test(lm)) {
+    for (const w of workers.values()) w.handle('unload');
+    say('crew: everyone to base to drop off');
+    return;
+  }
+
   // --- crew-wide: "all <command>" ---
   if ((mm = m.match(/^all\s+(.+)/i))) {
     for (const w of workers.values()) w.handle(mm[1]);
