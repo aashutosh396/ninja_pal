@@ -1,6 +1,6 @@
 node_modules/
 config.json
-memory.json
+memory*.json
 npm-debug.log*
 *.log
-workers.json
+workers*.json

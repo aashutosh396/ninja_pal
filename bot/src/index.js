@@ -25,7 +25,9 @@ if (!fs.existsSync(cfgPath)) {
 }
 const config = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
 const MAX = config.maxWorkers || 5;
-const WORKERS_FILE = path.join(__dirname, '..', 'workers.json');
+// Per-game crew file: workers-<game>.json (from config.game), else workers.json.
+const GAME_TAG = config.game ? '-' + String(config.game).replace(/[^a-z0-9_-]/gi, '') : '';
+const WORKERS_FILE = path.join(__dirname, '..', `workers${GAME_TAG}.json`);
 
 let defs = loadDefs();
 const workers = new Map(); // lowercased name -> worker handle (insertion order = spawn order)
@@ -108,9 +110,19 @@ function route(m, fallback) {
   }
 
   // --- base / spawn / op ---
+  if ((mm = m.match(/^new game\s+(\S+)/i))) {
+    const g = mm[1].replace(/[^a-z0-9_-]/gi, '');
+    try {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      cfg.game = g;
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+      say(`new game "${g}" set — restart me (Ctrl+C, npm start) to play it with its own fresh base + crew files`);
+    } catch (e) { say("couldn't switch game"); }
+    return;
+  }
   if (/^(clear base|forget base|reset base)\b/.test(lm)) { memory.clearBase(); say('base cleared — the crew will stick near you until you "set base" again'); return; }
   if (/^(clear supply|forget supply|reset supply)\b/.test(lm)) { memory.clearSupply(); say('supply chest cleared — tool_guy will set up a new one'); return; }
-  if (/^(reset (crew )?base|new game|reset memory)\b/.test(lm)) { memory.clearBase(); memory.clearSupply(); say('base + supply cleared — say "set base" to start fresh'); return; }
+  if (/^(reset (crew )?base|reset memory|fresh start)\b/.test(lm)) { memory.clearBase(); memory.clearSupply(); say('base + supply cleared — say "set base" to start fresh'); return; }
   if (/^(set base|base here|set depot)\b/.test(lm)) { setBaseAtOwner(); return; }
   if (/^(set supply|supply chest here|this is the supply chest|supply here|set supply chest)\b/.test(lm)) { setSupplyAtOwner(); return; }
   if (/^(set spawn|spawn here|set world ?spawn)\b/.test(lm)) { setSpawnAtOwner(); return; }

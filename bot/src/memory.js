@@ -5,7 +5,16 @@
 const fs = require('fs');
 const path = require('path');
 
-const FILE = path.join(__dirname, '..', 'memory.json');
+// Per-game file: memory-<game>.json (from config.game), else memory.json. So each world keeps
+// its own base/supply/notes and a new game starts clean.
+function gameTag() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config.json'), 'utf8'));
+    const g = cfg.game ? String(cfg.game).replace(/[^a-z0-9_-]/gi, '') : '';
+    return g ? `-${g}` : '';
+  } catch (e) { return ''; }
+}
+const FILE = path.join(__dirname, '..', `memory${gameTag()}.json`);
 
 function load() {
   try {
