@@ -42,7 +42,7 @@ function saveDefs() {
   try { fs.writeFileSync(WORKERS_FILE, JSON.stringify(defs, null, 2)); } catch (e) { /* */ }
 }
 
-const manager = { onChat, onWhisper };
+const manager = { onChat, onWhisper, persist: () => saveDefs() };
 
 function spawnWorker(def) {
   workers.set(def.name.toLowerCase(), createWorker(config, def, manager));
@@ -132,7 +132,9 @@ function setBaseAtOwner() {
     const p = w.ownerPos && w.ownerPos();
     if (p) {
       memory.setBase(p);
-      say(`base set at ${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)} — i'll bring loot here when full (put a chest there!)`);
+      const b = memory.getBase();
+      say(`/setworldspawn ${b.x} ${b.y} ${b.z}`); // also set the world spawn here (needs me op'd)
+      say(`base + world spawn set at ${b.x},${b.y},${b.z} — i'll bring loot here when full (put a chest there!)`);
       return;
     }
   }

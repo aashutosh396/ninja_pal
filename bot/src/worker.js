@@ -89,10 +89,10 @@ function createWorker(config, def, manager) {
     state.busy = true;
     state.cancel = false;
     try {
-      // When the bag is filling and a base is set, run loot to base (keep tools), then resume.
-      const base = memory.getBase();
-      if (base && bot.inventory.emptySlotCount() <= 6) {
-        await baseRun(base);
+      // When the bag is filling, run loot to MY chest (if assigned) else the shared base.
+      const spot = def.chest || memory.getBase();
+      if (spot && bot.inventory.emptySlotCount() <= 6) {
+        await baseRun(spot);
       } else {
         await runJob();
       }
@@ -101,10 +101,10 @@ function createWorker(config, def, manager) {
     }
   }
 
-  async function baseRun(base) {
-    state.goal = 'returning to base';
-    log('loot run -> base');
-    skills.tpTo(base.x, base.y, base.z);          // needs op; falls back to depositing wherever it lands
+  async function baseRun(spot) {
+    state.goal = def.chest ? 'returning to my chest' : 'returning to base';
+    log('loot run ->', def.chest ? 'own chest' : 'base');
+    skills.tpTo(spot.x, spot.y, spot.z);          // needs op; falls back to depositing wherever it lands
     await new Promise((r) => setTimeout(r, 2000)); // let the tp + chunk load settle
     await skills.depositLoot();                     // dump loot, keep tools
   }
@@ -190,7 +190,8 @@ function createWorker(config, def, manager) {
     if (/\bstatus\b|\bwyd\b|what('?s| is| are)\b.*\b(goal|doing|job)\b|how('?s| is) it going/.test(m)) {
       const where = state.mode === 'follow' ? 'following you' : (state.paused ? 'paused' : `on job (${state.goal})`);
       const p = bot.entity.position;
-      bot.chat(`${name}: ${where} | hp ${Math.round(bot.health)} food ${Math.round(bot.food)} | ${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`);
+      const chest = def.chest ? `${def.chest.x},${def.chest.y},${def.chest.z}` : '(shared base)';
+      bot.chat(`${name}: ${where} | hp ${Math.round(bot.health)} food ${Math.round(bot.food)} | at ${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)} | chest ${chest}`);
       return;
     }
     if (/\b(do your thing|work|resume|continue|carry on|get back to work|keep working)\b/.test(m)) {
@@ -207,6 +208,14 @@ function createWorker(config, def, manager) {
     if (/\b(defend|protect|guard)\b/.test(m)) { state.autoDefend = true; bot.chat(`${name}: got your back`); return; }
     if (/\b(stand down|chill|relax|at ease)\b/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat(`${name}: standing down`); return; }
     if (/\bremember\b|\bnote\b|\bkeep in mind\b/.test(m)) { memory.add(message); bot.chat(`${name}: got it, noted`); return; }
+    if (/\b(this is your chest|your chest|chest here|set chest|my chest|assign chest)\b/.test(m)) {
+      const o = skills.findOwner();
+      const p = o ? o.position : bot.entity.position; // your spot if visible, else where i'm standing
+      def.chest = { x: Math.round(p.x), y: Math.round(p.y), z: Math.round(p.z) };
+      if (manager.persist) manager.persist();
+      bot.chat(`${name}: got it — my chest is at ${def.chest.x},${def.chest.y},${def.chest.z}`);
+      return;
+    }
 
     // one-shot tasks
     if (state.busy) { bot.chat(`${name}: busy — say "stop" to interrupt`); return; }
