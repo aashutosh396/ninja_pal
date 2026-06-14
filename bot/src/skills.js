@@ -159,8 +159,9 @@ function makeSkills(bot, config, state) {
           const base = memory.getBase();
           if (base && block && block.position) {
             const p = block.position;
-            if (Math.abs(p.x - base.x) <= 6 && Math.abs(p.y - base.y) <= 4 && Math.abs(p.z - base.z) <= 6) {
-              return false; // protected base footprint -> use the door / go around
+            // protected 16x16 footprint around the base (±8), tall enough for a real build (±8)
+            if (Math.abs(p.x - base.x) <= 8 && Math.abs(p.y - base.y) <= 8 && Math.abs(p.z - base.z) <= 8) {
+              return false; // never dig here -> use the door / go around
             }
           }
         } catch (e) { /* */ }
