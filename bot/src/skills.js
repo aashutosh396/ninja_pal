@@ -977,6 +977,9 @@ function makeSkills(bot, config, state) {
       await placeItemAt('oak_door', new Vec3(cx, cy, cz - radius));
     } catch (e) { /* no door, leave the gap */ }
 
+    if (placed < Math.max(8, targets.length * 0.4)) {
+      return `couldn't wall here (placed ${placed}/${targets.length}) — set the base on clear, flat ground`;
+    }
     say(`base walled — ${placed} blocks${failed ? `, missed ${failed}` : ''}`);
     return null;
   }

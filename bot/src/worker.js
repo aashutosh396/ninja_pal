@@ -285,8 +285,9 @@ function createWorker(config, def, manager) {
     if (!memory.getWalled()) {
       state.goal = 'building the base wall';
       const e = await skills.buildWall(6, 5);
-      if (!e) { memory.setWalled(true); bot.chat(`${name}: base walled off with a door`); }
-      else if (Date.now() - lastNudge > 30000) { lastNudge = Date.now(); bot.chat(`${name}: ${e}`); }
+      memory.setWalled(true); // attempt once only — never loop on it
+      if (e) bot.chat(`${name}: ${e}. say "${name} build wall" once you're on clear ground`);
+      else bot.chat(`${name}: base walled off with a door`);
       return;
     }
 
@@ -444,6 +445,11 @@ function createWorker(config, def, manager) {
       if (/\b(deposit|store|stash)\b|put .*\b(chest|barrel)\b/.test(m)) return ack(await skills.depositToChest(itemFromText(m), countFromText(m)));
       if (/\b(drop|toss|dump)\b/.test(m)) return ack(await skills.drop(itemFromText(m), countFromText(m)));
       if (/\bget tools\b|make tools/.test(m)) return ack(await skills.getTools());
+      if (/\b(build|make|raise) (the )?wall|wall (the )?base|fortify\b/.test(m)) {
+        const e = await skills.buildWall(6, 5);
+        if (!e) { memory.setWalled(true); bot.chat(`${name}: base walled`); } else bot.chat(`${name}: ${e}`);
+        return;
+      }
       if (/\bbuild .*house\b|\bhouse\b/.test(m)) return ack(await skills.buildHouse());
       if (/\bshelter\b/.test(m)) return ack(await skills.build('shelter'));
       if (/\bmine\b/.test(m)) return ack(await skills.mineOre(itemFromText(m), countFromText(m) || 8));
