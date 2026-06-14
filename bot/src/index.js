@@ -41,7 +41,7 @@ function saveDefs() {
   try { fs.writeFileSync(WORKERS_FILE, JSON.stringify(defs, null, 2)); } catch (e) { /* */ }
 }
 
-const manager = { onChat };
+const manager = { onChat, onWhisper };
 
 function spawnWorker(def) {
   workers.set(def.name.toLowerCase(), createWorker(config, def, manager));
@@ -66,10 +66,9 @@ function isDup(u, m) {
   return now - last < 1200;
 }
 
-function onChat(username, message) {
-  if (config.owner && username !== config.owner) return; // only the owner commands the crew
-  if (isDup(username, message)) return;
-  const m = String(message).trim();
+// Route a command. `fallback` is the worker that gets a bare (unaddressed) command — the first
+// worker for public chat, or the whispered-to worker for a /msg.
+function route(m, fallback) {
   const lm = m.toLowerCase();
   let mm;
 
@@ -93,17 +92,29 @@ function onChat(username, message) {
     return;
   }
 
-  // --- addressed to one worker: "<name> <command>" ---
+  // --- addressed to one worker by name: "<name> <command>" ---
   const first = lm.split(/\s+/)[0];
   if (workers.has(first)) {
-    const rest = m.slice(m.indexOf(' ') + 1);
-    workers.get(first).handle(rest);
+    workers.get(first).handle(m.slice(m.indexOf(' ') + 1));
     return;
   }
 
-  // --- bare command -> the first worker ---
-  const p = primary();
-  if (p) p.handle(m);
+  // --- bare command -> the fallback worker ---
+  if (fallback) fallback.handle(m);
+}
+
+// Public chat: bare commands go to the first worker.
+function onChat(username, message) {
+  if (config.owner && username !== config.owner) return; // only the owner commands the crew
+  if (isDup(username, message)) return;
+  route(String(message).trim(), primary());
+}
+
+// Whisper (/msg <worker> ...): only that worker's bot receives it, so a bare command goes to
+// THAT worker. (Management + "name"/"all" prefixes still work.) No dedup — only one bot got it.
+function onWhisper(username, message, selfName) {
+  if (config.owner && username !== config.owner) return;
+  route(String(message).trim(), workers.get(selfName.toLowerCase()));
 }
 
 function createWorkerCmd(rawName, jobStr) {

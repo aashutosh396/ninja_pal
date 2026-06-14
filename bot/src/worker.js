@@ -4,7 +4,7 @@
 // (index.js) spawns these and routes the owner's chat to the right worker(s).
 
 const mineflayer = require('mineflayer');
-const { pathfinder } = require('mineflayer-pathfinder');
+const { pathfinder, goals } = require('mineflayer-pathfinder');
 const { plugin: pvp } = require('mineflayer-pvp');
 const collectBlock = require('mineflayer-collectblock').plugin;
 const { makeSkills } = require('./skills');
@@ -62,7 +62,7 @@ function createWorker(config, def, manager) {
     });
 
     bot.on('chat', (u, m) => manager.onChat(u, m));
-    bot.on('whisper', (u, m) => manager.onChat(u, m));
+    bot.on('whisper', (u, m) => manager.onWhisper(u, m, name));
     bot.on('death', () => { state.mode = 'idle'; });
     bot.on('kicked', (r) => log('kicked:', r));
     bot.on('error', (e) => log('error:', e.message));
@@ -101,9 +101,15 @@ function createWorker(config, def, manager) {
     switch (plan.kind) {
       case 'idle':
         return;
-      case 'guard':
-        skills.followOwner();
+      case 'guard': {
+        // Re-affirm a dynamic follow goal each tick WITHOUT setting mode='follow' (which would
+        // make the job loop skip and the guard freeze). Defense reflexes handle fighting.
+        const owner = skills.findOwner();
+        if (owner) {
+          try { bot.pathfinder.setGoal(new goals.GoalFollow(owner, 3), true); } catch (e) { /* */ }
+        }
         return;
+      }
       case 'hunt': {
         const e = await skills.hunt();
         if (e) await skills.wander();
