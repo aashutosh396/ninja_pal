@@ -195,6 +195,12 @@ function setBaseAtOwner() {
   // sit just above the emerald block, light-green text
   say(`/summon minecraft:text_display ${b.x + 0.5} ${b.y + 0.6} ${b.z + 0.5} {text:'{"text":"Base","color":"green"}',billboard:"center",Tags:["npbase"]}`);
   say(`base set at ${b.x},${b.y},${b.z} — emerald block + a floating green "Base" label`);
+
+  // The game "begins" at set base: auto-spawn a logistics tool_guy if the crew doesn't have one.
+  const hasLogi = [...workers.values()].some((w) => /logistics|foreman/.test(w.def.role || ''));
+  if (!hasLogi && workers.size < MAX) {
+    createWorkerCmd('tool_guy', 'logistics');
+  }
 }
 
 // Supply chest = where workers TAKE tools/food; loot is never deposited here.

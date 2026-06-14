@@ -226,11 +226,34 @@ function createWorker(config, def, manager) {
     if (spot) { try { await bot.pathfinder.goto(new goals.GoalNear(spot.x, spot.y, spot.z, 3)); } catch (e) { /* */ } }
   }
 
-  // Logistics/foreman: keep the supply chest stocked with tools + food, and keep the crew working.
+  function summonSupplyHologram() {
+    const s = memory.getSupply();
+    if (!s) return;
+    try {
+      bot.chat(`/kill @e[type=minecraft:text_display,tag=npsupply]`);
+      bot.chat(`/summon minecraft:text_display ${s.x + 0.5} ${s.y + 1.2} ${s.z + 0.5} {text:'{"text":"Supply","color":"green"}',billboard:"center",Tags:["npsupply"]}`);
+    } catch (e) { /* needs op; fine */ }
+  }
+
+  // Logistics/foreman: bootstrap the supply chest (adopt an existing one, else build it), then
+  // keep it stocked with tools + food and keep the crew working.
   async function runLogistics() {
+    // --- bootstrap: make sure there's a supply chest ---
     if (!memory.getSupply()) {
-      if (Date.now() - lastNudge > 60000) { lastNudge = Date.now(); bot.chat(`${name}: set a supply chest first — stand at it and say "set supply"`); }
-      await idleAtBase();
+      await idleAtBase(); // get to base so we can see the local chests
+      if (await skills.adoptSupplyChest()) {
+        bot.chat(`${name}: found a supply chest, i'll use it`);
+        summonSupplyHologram();
+        return;
+      }
+      state.goal = 'building a supply chest';
+      const e = await skills.buildSupplyChest(); // gathers wood -> double chest -> sets as supply
+      if (e) {
+        if (Date.now() - lastNudge > 30000) { lastNudge = Date.now(); bot.chat(`${name}: ${e}`); }
+        return;
+      }
+      bot.chat(`${name}: built the supply chest at base`);
+      summonSupplyHologram();
       return;
     }
 

@@ -850,6 +850,87 @@ function makeSkills(bot, config, state) {
     return planted ? null : 'couldnt plant saplings';
   }
 
+  // Place a specific item (e.g. a chest) at a world position, pathing into reach first.
+  async function placeItemAt(itemName, pos) {
+    const have = () => bot.inventory.items().find((i) => i.name === itemName);
+    if (!have()) return false;
+    const existing = bot.blockAt(pos);
+    if (existing && existing.boundingBox === 'block') return existing.name === itemName;
+    try { await bot.pathfinder.goto(new goals.GoalPlaceBlock(pos.clone(), bot.world, { range: 4 })); } catch (e) { /* */ }
+    try { bot.pathfinder.setGoal(null); } catch (e) { /* */ }
+    for (const d of PLACE_DIRS) {
+      const ref = bot.blockAt(pos.plus(d));
+      if (ref && ref.boundingBox === 'block') {
+        try {
+          await bot.equip(have(), 'hand');
+          await bot.lookAt(pos.offset(0.5, 0.5, 0.5), true);
+          await bot.placeBlock(ref, new Vec3(-d.x, -d.y, -d.z));
+          return true;
+        } catch (e) { /* try next face */ }
+      }
+    }
+    return false;
+  }
+
+  // Build the supply chest at base: gather wood -> craft a double chest -> place it beside the
+  // base -> register it as the supply chest. (The first chest built is the default supply chest.)
+  async function buildSupplyChest() {
+    const base = memory.getBase();
+    if (!base) return 'no base set';
+    const countName = (n) => bot.inventory.items().filter((i) => i.name === n).reduce((a, b) => a + b.count, 0);
+
+    if (countName('chest') < 2) {
+      if (countLogs() < 2 && !bot.inventory.items().some((i) => i.name.endsWith('_planks'))) {
+        const e = await collect('wood', 3);
+        if (e) return e;
+      }
+      await craftPlanksFromLogs();
+      await craft('crafting_table', 1);
+      await placeCraftingTable();
+      await craft('chest', 2 - countName('chest'));
+    }
+    if (countName('chest') < 1) return 'need wood to build the supply chest';
+
+    try { await bot.pathfinder.goto(new goals.GoalNear(base.x, base.y, base.z, 2)); } catch (e) { /* */ }
+    // Try a couple of spots beside the base for a double chest.
+    for (const dir of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const p1 = new Vec3(base.x + dir[0], base.y, base.z + dir[1]);
+      if (await placeItemAt('chest', p1)) {
+        memory.setSupply(p1);
+        const p2 = new Vec3(base.x + dir[0] * 2, base.y, base.z + dir[1] * 2);
+        await placeItemAt('chest', p2); // second half -> double chest (best effort)
+        return null;
+      }
+    }
+    return 'couldn\'t place the supply chest';
+  }
+
+  // Adopt an existing supply chest if there is one nearby (signed "supply", or already holding
+  // tools). Returns true if it set one as the supply chest. Use BEFORE building a new one.
+  async function adoptSupplyChest() {
+    if (memory.getSupply()) return true;
+    const chests = scanChests(32);
+    if (!chests.length) return false;
+    // 1) a chest with a supply-ish sign
+    let pick = chests.find((c) => /supply|tools|gear|items/.test(c.label));
+    // 2) else a chest that already contains tools
+    if (!pick) {
+      for (const c of chests) {
+        if (state.cancel) break;
+        try {
+          await bot.pathfinder.goto(new goals.GoalGetToBlock(c.pos.x, c.pos.y, c.pos.z));
+          const chest = await bot.openContainer(bot.blockAt(c.pos));
+          const hasTools = chest.containerItems().some((it) => /_(pickaxe|axe|sword|shovel|hoe)$/.test(it.name));
+          try { chest.close(); } catch (e) { /* */ }
+          if (hasTools) { pick = c; break; }
+        } catch (e) { /* */ }
+      }
+    }
+    if (!pick) return false;
+    memory.setSupply(pick.pos);
+    return true;
+  }
+
   // A short summary of the gear/supplies the worker is carrying (for status).
   function gearSummary() {
     const mcData = require('minecraft-data')(bot.version);
@@ -1335,6 +1416,9 @@ function makeSkills(bot, config, state) {
     stockSupply,
     makeToolset,
     withdrawFromBase,
+    placeItemAt,
+    buildSupplyChest,
+    adoptSupplyChest,
     ensureTool,
     plantTrees,
     gearSummary,
