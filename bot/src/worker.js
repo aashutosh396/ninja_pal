@@ -38,13 +38,16 @@ function createWorker(config, def, manager) {
 
   function connect() {
     if (stopped) return;
+    const auth = wcfg.auth || 'offline';
     try {
       bot = mineflayer.createBot({
         host: wcfg.host || 'localhost',
         port: wcfg.port || 25565,
-        username: name,
+        // offline: the worker name is the in-game name. microsoft: log in the account email
+        // (the bot joins as that account's real name; online mode = one account/bot).
+        username: auth === 'microsoft' ? (wcfg.username || wcfg.owner) : name,
         version: (wcfg.version && wcfg.version !== 'auto') ? wcfg.version : false,
-        auth: wcfg.auth || 'offline',
+        auth,
       });
     } catch (e) {
       log('createBot failed:', e.message, '— retry 8s');

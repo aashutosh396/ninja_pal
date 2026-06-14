@@ -1,0 +1,20 @@
+{
+  "_note": "OFFLINE example — cracked/offline servers, TLauncher, or LAN with online-mode=false. No account needed; a full crew of named workers works. Copy to config.json and edit owner/port.",
+  "host": "localhost",
+  "port": 25565,
+  "version": "auto",
+  "auth": "offline",
+  "palName": "Ninja",
+  "owner": "YourMinecraftUsername",
+  "maxWorkers": 5,
+  "game": "",
+
+  "backend": "claude",
+  "claudeModel": "claude-sonnet-4-6",
+
+  "apiUrl": "https://api.openai.com/v1/chat/completions",
+  "apiKey": "",
+  "model": "gpt-4o",
+
+  "systemPrompt": "You are a Minecraft worker bot on the player's crew. Short, casual, lowercase game chat. Do your job; never say you are an AI; no markdown."
+}

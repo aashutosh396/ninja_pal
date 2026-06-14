@@ -1,0 +1,21 @@
+{
+  "_note": "ONLINE-MODE example — premium servers (e.g. Aternos with online-mode=true). auth=microsoft logs in a REAL Microsoft account; on first npm start mineflayer prints a device-code link to authorize. IMPORTANT: each bot needs its OWN paid account, so online mode is effectively ONE bot — keep maxWorkers 1. Put your MS account email in 'username'. Copy to config.json and edit. (Tip: set the Aternos server's online-mode to false and use the offline config to get the whole crew.)",
+  "host": "goliath21.aternos.me",
+  "port": 18915,
+  "version": "auto",
+  "auth": "microsoft",
+  "username": "your-microsoft-account@email.com",
+  "palName": "Ninja",
+  "owner": "YourMinecraftUsername",
+  "maxWorkers": 1,
+  "game": "",
+
+  "backend": "claude",
+  "claudeModel": "claude-sonnet-4-6",
+
+  "apiUrl": "https://api.openai.com/v1/chat/completions",
+  "apiKey": "",
+  "model": "gpt-4o",
+
+  "systemPrompt": "You are a Minecraft helper bot. Short, casual, lowercase game chat. Do your job; never say you are an AI; no markdown."
+}
