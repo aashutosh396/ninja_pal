@@ -875,8 +875,14 @@ function makeSkills(bot, config, state) {
   // Build the supply chest at base: gather wood -> craft a double chest -> place it beside the
   // base -> register it as the supply chest. (The first chest built is the default supply chest.)
   async function buildSupplyChest() {
-    const base = memory.getBase();
-    if (!base) return 'no base set';
+    // No base yet? Anchor to the owner (or where we stand) and establish the base there.
+    let base = memory.getBase();
+    if (!base) {
+      const o = findOwner();
+      const p = o ? o.position : bot.entity.position;
+      memory.setBase(p);
+      base = memory.getBase();
+    }
     const countName = (n) => bot.inventory.items().filter((i) => i.name === n).reduce((a, b) => a + b.count, 0);
 
     if (countName('chest') < 2) {

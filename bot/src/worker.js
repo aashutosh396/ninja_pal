@@ -222,7 +222,8 @@ function createWorker(config, def, manager) {
   const FOOD_TARGET = 24;
 
   async function idleAtBase() {
-    const spot = memory.getBase() || memory.getSupply();
+    let spot = memory.getBase() || memory.getSupply();
+    if (!spot) { const o = skills.findOwner && skills.findOwner(); if (o) spot = o.position; } // no base -> stay near the owner
     if (spot) { try { await bot.pathfinder.goto(new goals.GoalNear(spot.x, spot.y, spot.z, 3)); } catch (e) { /* */ } }
   }
 
