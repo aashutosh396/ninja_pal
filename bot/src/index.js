@@ -25,9 +25,10 @@ if (!fs.existsSync(cfgPath)) {
 }
 const config = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
 const MAX = config.maxWorkers || 5;
-// Per-game crew file: workers-<game>.json (from config.game), else workers.json.
+// Per-game crew file: workers-<game>.json (from config.game). Without a manual game name it
+// becomes workers-w<world>.json once the world is detected (see onWorldKnown).
 const GAME_TAG = config.game ? '-' + String(config.game).replace(/[^a-z0-9_-]/gi, '') : '';
-const WORKERS_FILE = path.join(__dirname, '..', `workers${GAME_TAG}.json`);
+let WORKERS_FILE = path.join(__dirname, '..', `workers${GAME_TAG}.json`);
 
 let defs = loadDefs();
 const workers = new Map(); // lowercased name -> worker handle (insertion order = spawn order)
@@ -50,13 +51,21 @@ const manager = {
   onWhisper,
   persist: () => saveDefs(),
   tellAll: (cmd) => { for (const w of workers.values()) w.handle(cmd); },
-  // First worker to spawn reports the world spawn point -> auto-key memory to this world.
+  // First worker to spawn reports the world spawn point -> key BOTH memory and the crew file to
+  // this world, then load + spawn this world's saved crew.
   onWorldKnown: (sp) => {
     if (worldSet || !sp) return;
     worldSet = true;
     const id = `${Math.round(sp.x)}_${Math.round(sp.z)}`;
     memory.setWorld(id);
-    console.log(`[Crew] world ${id} -> memory-w${id}.json`);
+    if (!GAME_TAG) WORKERS_FILE = path.join(__dirname, '..', `workers-w${id}.json`);
+    console.log(`[Crew] world ${id} -> memory-w${id}.json / ${path.basename(WORKERS_FILE)}`);
+    defs = loadDefs();
+    if (!defs.some((d) => d.name.toLowerCase() === 'tool_guy')) defs.push({ name: 'tool_guy', role: 'logistics' });
+    saveDefs();
+    for (const d of defs.slice(0, MAX)) {
+      if (!workers.has(d.name.toLowerCase())) spawnWorker(d);
+    }
   },
 };
 
@@ -279,14 +288,11 @@ function removeWorker(rawName) {
 }
 
 function start() {
-  if (!defs.length) {
-    // first run: a single worker named from config, surviving on its own
-    defs = [{ name: config.palName || 'Ninja', role: 'survivor' }];
-    saveDefs();
-  }
-  defs.slice(0, MAX).forEach(spawnWorker);
-  console.log(`[Crew] brain=${require('./brain').resolveBackend(config)} | spawning ${workers.size} worker(s): ${[...workers.keys()].join(', ')}`);
-  console.log('[Crew] commands: worker create <name> <job> | worker list | worker roles | worker remove <name> | <name> <cmd> | all <cmd>');
+  console.log(`[Crew] brain=${require('./brain').resolveBackend(config)} | booting lead worker to detect the world...`);
+  console.log('[Crew] commands: worker create <name> <job> | worker list | worker roles | set base | help');
+  // Spawn the lead worker (tool_guy). On its spawn it detects the world, then onWorldKnown
+  // loads this world's saved crew and spawns the rest.
+  spawnWorker({ name: 'tool_guy', role: 'logistics' });
 }
 
 // Keep the crew alive through unexpected errors.
