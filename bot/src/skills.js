@@ -763,6 +763,66 @@ function makeSkills(bot, config, state) {
     return made.length ? null : 'need wood + stone to make tools';
   }
 
+  // --- default bootstrap: make sure a worker HAS the tool its job needs ----------------------
+  function hasTool(kind) {
+    return bot.inventory.items().some((i) => i.name.endsWith(`_${kind}`));
+  }
+
+  // Ensure the worker has a tool of `kind` (pickaxe/axe/sword/shovel/hoe):
+  //   1) already have it -> done; 2) take one from the supply chest; 3) forge a wooden one.
+  async function ensureTool(kind) {
+    if (hasTool(kind)) return null;
+    await restockFromSupply();           // try the supply chest first
+    if (hasTool(kind)) return null;
+    // forge a wooden one: wood -> planks -> table -> stick -> wooden_<kind>
+    if (countLogs() < 2 && !bot.inventory.items().some((i) => i.name.endsWith('_planks'))) {
+      const e = await collect('wood', 2);
+      if (e) return `no ${kind}, and no wood to make one`;
+    }
+    await craftPlanksFromLogs();
+    await craft('crafting_table', 1);
+    await placeCraftingTable();
+    await craft('stick', 1);
+    await craft(`wooden_${kind}`, 1);
+    return hasTool(kind) ? null : `couldn't make a ${kind}`;
+  }
+
+  // Plant trees: get saplings (break leaves if none on hand), then plant on grass/dirt nearby.
+  async function plantTrees(max = 3) {
+    const SAPLINGS = ['oak_sapling', 'birch_sapling', 'spruce_sapling', 'jungle_sapling', 'acacia_sapling', 'dark_oak_sapling', 'cherry_sapling'];
+    const haveSapling = () => bot.inventory.items().find((i) => SAPLINGS.includes(i.name));
+    if (!haveSapling()) {
+      for (let i = 0; i < 5 && !haveSapling(); i++) {
+        if (state.cancel) break;
+        const leaf = bot.findBlock({ matching: (b) => b && b.name.endsWith('_leaves'), maxDistance: 16 });
+        if (!leaf) break;
+        try {
+          await bot.pathfinder.goto(new goals.GoalGetToBlock(leaf.position.x, leaf.position.y, leaf.position.z));
+          await bot.dig(leaf);
+          try { await bot.pathfinder.goto(new goals.GoalNear(leaf.position.x, leaf.position.y, leaf.position.z, 0)); } catch (e) { /* grab drop */ }
+        } catch (e) { break; }
+      }
+    }
+    let sap = haveSapling();
+    if (!sap) return 'no saplings to plant';
+    const ground = bot.findBlocks({ matching: (b) => b && ['grass_block', 'dirt', 'podzol', 'coarse_dirt', 'rooted_dirt'].includes(b.name), maxDistance: 16, count: 24 });
+    let planted = 0;
+    for (const pos of ground) {
+      if (planted >= max || state.cancel) break;
+      const above = bot.blockAt(pos.offset(0, 1, 0));
+      if (!above || above.boundingBox !== 'empty') continue;
+      try {
+        await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y + 1, pos.z, 2));
+        await bot.equip(sap, 'hand');
+        await bot.placeBlock(bot.blockAt(pos), new Vec3(0, 1, 0));
+        planted++;
+        sap = haveSapling();
+        if (!sap) break;
+      } catch (e) { /* next spot */ }
+    }
+    return planted ? null : 'couldnt plant saplings';
+  }
+
   // A short summary of the gear/supplies the worker is carrying (for status).
   function gearSummary() {
     const mcData = require('minecraft-data')(bot.version);
@@ -1247,6 +1307,8 @@ function makeSkills(bot, config, state) {
     supplyCounts,
     stockSupply,
     makeToolset,
+    ensureTool,
+    plantTrees,
     gearSummary,
     scanChests,
     tpTo,

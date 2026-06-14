@@ -182,6 +182,7 @@ function createWorker(config, def, manager) {
       case 'idle':
         return;
       case 'guard': {
+        await skills.ensureTool('sword'); // arm the guard (fast no-op once it has one)
         // Re-affirm a dynamic follow goal each tick WITHOUT setting mode='follow' (which would
         // make the job loop skip and the guard freeze). Defense reflexes handle fighting.
         const owner = skills.findOwner();
@@ -191,13 +192,16 @@ function createWorker(config, def, manager) {
         return;
       }
       case 'hunt': {
+        await skills.ensureTool('sword'); // get/forge a sword before hunting
         const e = await skills.hunt();
         if (e) await skills.wander();
         return;
       }
       case 'farm': {
-        const e = await skills.farm();
-        if (e) await skills.wander(); // no ripe crops here — roam to find a field
+        await skills.ensureTool('hoe'); // get/forge a hoe first
+        const e = await skills.farm(); // harvest + replant crops
+        await skills.plantTrees();      // farmers also plant trees
+        if (e) await skills.wander();   // no ripe crops here — roam to find a field
         return;
       }
       case 'survive':
@@ -249,6 +253,10 @@ function createWorker(config, def, manager) {
   }
 
   async function runGather(p) {
+    // Default flow: make sure I have the right tool (take from supply, else forge), THEN work.
+    const toolFor = p.verb === 'mine' ? 'pickaxe'
+      : (p.resource === 'wood' ? 'axe' : (p.resource === 'dirt' || p.resource === 'sand' ? 'shovel' : 'pickaxe'));
+    await skills.ensureTool(toolFor);
     const err = p.verb === 'mine'
       ? await skills.mineOre(p.resource, 16)
       : await skills.collect(p.resource, 16);
