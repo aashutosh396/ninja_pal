@@ -70,15 +70,40 @@ bot.once('spawn', () => {
   }, 2500);
 
   // Autonomy loop — advance one survival goal whenever the pal is free.
+  // Detects when it's making no progress (e.g. no trees in a desert) and pauses + asks the owner
+  // instead of spamming the same goal forever.
+  let autoLastGoal = null;
+  let autoNoProgress = 0;
+  let autoPausedUntil = 0;
+  const invTotal = () => {
+    try { return bot.inventory.items().reduce((a, b) => a + b.count, 0); } catch (e) { return 0; }
+  };
+
   setInterval(() => {
     if (!state.autonomous || state.busy || state.panicking || state.mode === 'follow') return;
+    if (Date.now() < autoPausedUntil) return;
     state.busy = true;
+    const before = invTotal();
+    const hadHome = !!memory.getHome();
     autonomy
       .step()
-      .then((what) => { if (what) console.log('[Ninja Pal] auto:', what); })
+      .then((what) => {
+        if (what !== autoLastGoal) {
+          autoLastGoal = what;
+          if (what) console.log('[Ninja Pal] auto:', what); // log only when the goal changes
+        }
+        const progressed = invTotal() !== before || (!hadHome && !!memory.getHome());
+        autoNoProgress = progressed ? 0 : autoNoProgress + 1;
+        if (autoNoProgress >= 5) {
+          autoNoProgress = 0;
+          autoPausedUntil = Date.now() + 90000; // back off 90s
+          bot.chat(`i'm stuck trying to ${autoLastGoal || 'get going'} — nothing useful around here. tp me somewhere or tell me what to do`);
+          console.log('[Ninja Pal] auto paused 90s (no progress)');
+        }
+      })
       .catch((e) => console.error('[Ninja Pal] auto error:', e.message))
       .finally(() => { state.busy = false; });
-  }, 6000);
+  }, 7000);
 });
 
 function onMessage(username, message) {

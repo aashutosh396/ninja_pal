@@ -54,6 +54,28 @@ const WEAPONS = [
 
 function makeSkills(bot, config, state) {
   let eating = false;
+  let lastSaid = '';
+  let lastSaidAt = 0;
+
+  // Throttled chat — suppresses the SAME line if repeated within 30s (kills autonomy spam).
+  function say(msg) {
+    const now = Date.now();
+    if (msg === lastSaid && now - lastSaidAt < 30000) return;
+    lastSaid = msg;
+    lastSaidAt = now;
+    bot.chat(msg);
+  }
+
+  // Throttled console log — same idea for noisy dig failures.
+  let lastLog = '';
+  let lastLogAt = 0;
+  function logOnce(msg) {
+    const now = Date.now();
+    if (msg === lastLog && now - lastLogAt < 30000) return;
+    lastLog = msg;
+    lastLogAt = now;
+    console.error(msg);
+  }
 
   function findOwner() {
     return (bot.players[config.owner] && bot.players[config.owner].entity) || null;
@@ -165,19 +187,26 @@ function makeSkills(bot, config, state) {
   async function digNearest(ids, label, maxDistance = 64) {
     const block = bot.findBlock({ matching: ids, maxDistance });
     if (!block) return 'none';
-    try {
-      await bot.pathfinder.goto(new goals.GoalGetToBlock(block.position.x, block.position.y, block.position.z));
-      await equipForBlock(block);
-      if (!bot.canDigBlock(block)) return 'cantbreak';
-      await bot.dig(block);
+    // Up to 2 attempts — "Digging aborted" / "goal changed" are usually transient interrupts.
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await bot.pathfinder.goto(new goals.GoalNear(block.position.x, block.position.y, block.position.z, 0));
-      } catch (e) { /* scoop the drop */ }
-      return 'ok';
-    } catch (e) {
-      console.error(`[Ninja Pal] dig fail (${label}):`, e.message);
-      return 'fail';
+        await bot.pathfinder.goto(new goals.GoalGetToBlock(block.position.x, block.position.y, block.position.z));
+        bot.pathfinder.setGoal(null); // stop moving so the dig isn't aborted by residual pathing
+        await equipForBlock(block);
+        if (!bot.canDigBlock(block)) return 'cantbreak';
+        await bot.dig(block);
+        try {
+          await bot.pathfinder.goto(new goals.GoalNear(block.position.x, block.position.y, block.position.z, 0));
+        } catch (e) { /* scoop the drop */ }
+        return 'ok';
+      } catch (e) {
+        const transient = /aborted|goal was changed|changed before/i.test(e.message || '');
+        if (transient && attempt === 0) continue; // retry once
+        logOnce(`[Ninja Pal] dig fail (${label}): ${e.message}`);
+        return 'fail';
+      }
     }
+    return 'fail';
   }
 
   async function collect(blockName, count = 1) {
@@ -187,7 +216,7 @@ function makeSkills(bot, config, state) {
       .filter((x) => x != null);
     if (!ids.length) return `i don't know how to collect "${blockName}"`;
     const want = Math.max(1, Math.min(count | 0 || 1, 16));
-    bot.chat(`getting ${want} ${blockName}`);
+    say(`getting  `);
     let got = 0;
     let miss = 0;
     while (got < want && miss < 3) {
@@ -233,7 +262,9 @@ function makeSkills(bot, config, state) {
 
   // Auto-eat when hungry so the pal doesn't starve (and natural regen keeps health up).
   async function eatTick() {
+    // Don't equip food mid-task (equipping aborts an in-progress dig). Only eat when free or starving.
     if (eating || bot.food >= 18) return;
+    if (state.busy && bot.food > 6) return;
     const mcData = require('minecraft-data')(bot.version);
     const food = bot.inventory.items().find((i) => mcData.foodsByName[i.name]);
     if (!food) return;
@@ -448,11 +479,11 @@ function makeSkills(bot, config, state) {
 
   async function getTools() {
     if (countLogs() < 3) {
-      bot.chat('grabbing some wood first');
+      say('grabbing some wood first');
       const err = await collect('wood', 3 - countLogs());
       if (err) return err;
     }
-    bot.chat('crafting planks + a table');
+    say('crafting planks + a table');
     await craftPlanksFromLogs();
     await craft('crafting_table', 1);
     const tableErr = await placeCraftingTable();
@@ -466,7 +497,7 @@ function makeSkills(bot, config, state) {
       if (!err) made.push(tool.replace('wooden_', ''));
     }
     if (!made.length) return "got the wood but ran short on planks/sticks for the tools";
-    bot.chat(`made: ${made.join(', ')}`);
+    say(`made: `);
     return null;
   }
 
@@ -536,7 +567,7 @@ function makeSkills(bot, config, state) {
   // Mine a target ore: grab it if it's in range, otherwise tunnel to expose more ground.
   async function mineOre(oreName, count = 1) {
     if (!(await ensurePickaxe())) {
-      bot.chat('no pickaxe yet, making one first');
+      say('no pickaxe yet, making one first');
       const e = await getTools(); // make a wooden pickaxe first
       if (!(await ensurePickaxe())) return e || "i couldn't make a pickaxe (need trees/wood nearby)";
     }
@@ -547,7 +578,7 @@ function makeSkills(bot, config, state) {
     if (!ids.length) return `i don't know the ore "${oreName}"`;
 
     const want = Math.max(1, Math.min(count | 0 || 1, 16));
-    bot.chat(`mining ${want} ${oreName}`);
+    say(`mining  `);
     let got = 0;
     for (let cycle = 0; cycle < 14 && got < want; cycle++) {
       const r = await digNearest(ids, oreName, 48);
@@ -570,7 +601,7 @@ function makeSkills(bot, config, state) {
     }
     if (!state.panicking) {
       state.panicking = true;
-      bot.chat('im low, falling back!');
+      say('im low, falling back!');
     }
     if (bot.pvp && bot.pvp.target) bot.pvp.stop();
 
@@ -618,13 +649,13 @@ function makeSkills(bot, config, state) {
     const names = ['cobblestone', 'dirt', 'stone', 'andesite', 'diorite', 'granite', 'cobbled_deepslate'];
     const have = () => bot.inventory.items().filter((i) => names.includes(i.name)).reduce((a, b) => a + b.count, 0);
     if (have() < 50) {
-      bot.chat('gathering blocks for a house');
+      say('gathering blocks for a house');
       await mineOre('stone', 16);
       if (have() < 40) await collect('dirt', 16);
     }
     if (have() < 20) return "couldn't get enough blocks for a house";
 
-    bot.chat('building us a house');
+    say('building us a house');
     const c = bot.entity.position.floored();
     const r = 2;
     const h = 3;
