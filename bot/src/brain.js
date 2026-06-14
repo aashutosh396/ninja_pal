@@ -46,6 +46,7 @@ const ACTIONS_DOC = `Actions you can plan (list them in the order they should ru
 - {"name":"mine","args":{"ore":"iron","count":3}}    mine a target ore (iron, coal, gold, diamond, …), tunnelling if needed
 - {"name":"hunt"}                                    hunt the nearest animal for food
 - {"name":"build_house"}                             gather materials and build a small house
+- {"name":"scout"}                                   travel the way the owner is facing to look for trees/a forest (use when they point you toward resources)
 - {"name":"explore"}                                 wander to a new nearby area
 - {"name":"goto","args":{"x":100,"y":64,"z":-200}}   walk to coordinates
 - {"name":"tp"}                                      teleport yourself to the owner (needs cheats + /op)

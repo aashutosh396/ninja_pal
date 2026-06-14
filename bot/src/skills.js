@@ -57,8 +57,10 @@ function makeSkills(bot, config, state) {
   let lastSaid = '';
   let lastSaidAt = 0;
 
-  // Throttled chat — suppresses the SAME line if repeated within 30s (kills autonomy spam).
+  // Progress chatter. During autonomy (state.quiet) it goes to the console only — the pal works
+  // silently. For manual commands it chats, but still suppresses the SAME line within 30s.
   function say(msg) {
+    if (state.quiet) { console.log('[Ninja Pal]', msg); return; }
     const now = Date.now();
     if (msg === lastSaid && now - lastSaidAt < 30000) return;
     lastSaid = msg;
@@ -182,31 +184,33 @@ function makeSkills(bot, config, state) {
     }
   }
 
-  // Find one matching block, path right up to it, equip the right tool, and dig it.
-  // Returns 'ok' | 'none' (nothing in view) | 'cantbreak' (wrong tool) | 'fail' (path/dig error).
-  async function digNearest(ids, label, maxDistance = 64) {
-    const block = bot.findBlock({ matching: ids, maxDistance });
-    if (!block) return 'none';
-    // Up to 2 attempts — "Digging aborted" / "goal changed" are usually transient interrupts.
-    for (let attempt = 0; attempt < 2; attempt++) {
+  // Try to dig ONE matching block, considering several nearest candidates (so a single
+  // unreachable tree doesn't make us give up). Returns:
+  //   'ok' | 'none' (nothing in range) | 'cantbreak' (wrong tool) | 'unreachable' (found but
+  //   couldn't path/dig any) | 'cancel'.
+  async function gatherOne(ids, label, maxDistance = 64) {
+    const positions = bot.findBlocks({ matching: ids, maxDistance, count: 12 });
+    if (!positions.length) return 'none';
+    logOnce(`[Ninja Pal] ${label}: ${positions.length} candidate(s) in range`);
+    let sawCantBreak = false;
+    for (const pos of positions) {
+      if (state.cancel) return 'cancel';
+      const block = bot.blockAt(pos);
+      if (!block) continue;
       try {
-        await bot.pathfinder.goto(new goals.GoalGetToBlock(block.position.x, block.position.y, block.position.z));
+        await bot.pathfinder.goto(new goals.GoalGetToBlock(pos.x, pos.y, pos.z));
         bot.pathfinder.setGoal(null); // stop moving so the dig isn't aborted by residual pathing
         await equipForBlock(block);
-        if (!bot.canDigBlock(block)) return 'cantbreak';
+        if (!bot.canDigBlock(block)) { sawCantBreak = true; continue; }
         await bot.dig(block);
-        try {
-          await bot.pathfinder.goto(new goals.GoalNear(block.position.x, block.position.y, block.position.z, 0));
-        } catch (e) { /* scoop the drop */ }
+        try { await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 0)); } catch (e) { /* grab drop */ }
         return 'ok';
       } catch (e) {
-        const transient = /aborted|goal was changed|changed before/i.test(e.message || '');
-        if (transient && attempt === 0) continue; // retry once
         logOnce(`[Ninja Pal] dig fail (${label}): ${e.message}`);
-        return 'fail';
+        // try the next candidate
       }
     }
-    return 'fail';
+    return sawCantBreak ? 'cantbreak' : 'unreachable';
   }
 
   async function collect(blockName, count = 1) {
@@ -216,16 +220,22 @@ function makeSkills(bot, config, state) {
       .filter((x) => x != null);
     if (!ids.length) return `i don't know how to collect "${blockName}"`;
     const want = Math.max(1, Math.min(count | 0 || 1, 16));
-    say(`getting  `);
+    say(`getting ${want} ${blockName}`);
     let got = 0;
-    let miss = 0;
-    while (got < want && miss < 3) {
-      const r = await digNearest(ids, blockName);
-      if (r === 'ok') { got++; continue; }
-      if (r === 'cantbreak') return `i can't break ${blockName} with my tools`;
-      miss++;
+    let unreachable = 0;
+    while (got < want) {
+      if (state.cancel) return null;
+      const r = await gatherOne(ids, blockName);
+      if (r === 'ok') { got++; unreachable = 0; continue; }
+      if (r === 'cancel') return null;
+      if (r === 'cantbreak') return got > 0 ? null : `i can't break ${blockName} with my tools`;
+      if (r === 'none') return got > 0 ? null : `no ${blockName} in sight`;
+      // 'unreachable' — found some but couldn't path/dig; try a couple times then report clearly
+      if (++unreachable >= 2) {
+        return got > 0 ? null : `i see ${blockName} but can't reach it (blocked by leaves/terrain)`;
+      }
     }
-    return got > 0 ? null : `couldn't find any ${blockName} nearby`;
+    return null;
   }
 
   function gotoCoord(x, y, z) {
@@ -483,6 +493,7 @@ function makeSkills(bot, config, state) {
       const err = await collect('wood', 3 - countLogs());
       if (err) return err;
     }
+    if (state.cancel) return null;
     say('crafting planks + a table');
     await craftPlanksFromLogs();
     await craft('crafting_table', 1);
@@ -497,7 +508,7 @@ function makeSkills(bot, config, state) {
       if (!err) made.push(tool.replace('wooden_', ''));
     }
     if (!made.length) return "got the wood but ran short on planks/sticks for the tools";
-    say(`made: `);
+    say(`made: ${made.join(', ')}`);
     return null;
   }
 
@@ -549,6 +560,7 @@ function makeSkills(bot, config, state) {
   async function tunnelForward(steps = 8) {
     const { dx, dz } = forwardCardinal();
     for (let i = 0; i < steps; i++) {
+      if (state.cancel) return; // interrupted by a command
       const base = bot.entity.position.floored();
       for (const dy of [0, 1]) {
         const b = bot.blockAt(base.offset(dx, dy, dz));
@@ -578,11 +590,13 @@ function makeSkills(bot, config, state) {
     if (!ids.length) return `i don't know the ore "${oreName}"`;
 
     const want = Math.max(1, Math.min(count | 0 || 1, 16));
-    say(`mining  `);
+    say(`mining ${want} ${oreName}`);
     let got = 0;
     for (let cycle = 0; cycle < 14 && got < want; cycle++) {
-      const r = await digNearest(ids, oreName, 48);
+      if (state.cancel) return null; // interrupted by a command
+      const r = await gatherOne(ids, oreName, 48);
       if (r === 'ok') { got++; continue; }
+      if (r === 'cancel') return null;
       if (r === 'cantbreak') return `i can't break ${oreName} — i need a better pickaxe`;
       await tunnelForward(6); // none in view / blocked -> expose more ground
     }
@@ -684,6 +698,36 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
+  // Travel in the direction the OWNER is facing (in ~20-block hops) to look for trees.
+  // mineflayer can't path 1000 blocks at once, so we hop + scan; stops when trees are in range.
+  async function scout() {
+    const owner = findOwner();
+    const yaw = owner ? owner.yaw : bot.entity.yaw;
+    const dx = -Math.sin(yaw);
+    const dz = -Math.cos(yaw);
+    const mcData = require('minecraft-data')(bot.version);
+    const logIds = resolveBlockNames('wood')
+      .map((n) => mcData.blocksByName[n] && mcData.blocksByName[n].id)
+      .filter((x) => x != null);
+
+    for (let step = 0; step < 12; step++) {
+      if (state.cancel) return null;
+      if (bot.findBlock({ matching: logIds, maxDistance: 64 })) {
+        say('found trees! chopping now');
+        return null; // autonomy / a follow-up will harvest
+      }
+      const p = bot.entity.position;
+      const tx = Math.round(p.x + dx * 20);
+      const tz = Math.round(p.z + dz * 20);
+      try {
+        await bot.pathfinder.goto(new goals.GoalNearXZ(tx, tz, 3));
+      } catch (e) {
+        break; // blocked / unreachable
+      }
+    }
+    return "walked a good way but no forest in this direction — point me again or tp me";
+  }
+
   // Wander to a random nearby spot to explore / search for resources.
   async function wander(distance = 18) {
     const p = bot.entity.position;
@@ -733,6 +777,7 @@ function makeSkills(bot, config, state) {
     isNight,
     hunt,
     buildHouse,
+    scout,
     wander,
     tpToOwner,
     tpOwnerHere,

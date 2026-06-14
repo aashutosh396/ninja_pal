@@ -28,6 +28,8 @@ const state = {
   panicking: false,
   autonomous: config.autonomous !== false, // default ON — the pal plays by itself
   busy: false, // a task is currently running (lock so auto + manual don't collide)
+  quiet: false, // suppress chat for routine autonomy work (still logs to console)
+  cancel: false, // cooperative cancel — set by interrupt commands to stop the current task
 };
 const history = []; // recent chat turns fed back to the LLM for short-term memory
 
@@ -83,6 +85,8 @@ bot.once('spawn', () => {
     if (!state.autonomous || state.busy || state.panicking || state.mode === 'follow') return;
     if (Date.now() < autoPausedUntil) return;
     state.busy = true;
+    state.cancel = false;
+    state.quiet = true; // autonomy works silently (console only) — no chat spam
     const before = invTotal();
     const hadHome = !!memory.getHome();
     autonomy
@@ -104,7 +108,7 @@ bot.once('spawn', () => {
         }
       })
       .catch((e) => console.error('[Ninja Pal] auto error:', e.message))
-      .finally(() => { state.busy = false; });
+      .finally(() => { state.busy = false; state.quiet = false; });
   }, 7000);
 });
 
@@ -121,38 +125,43 @@ async function handle(message) {
   if (!skills) return;
   const m = message.toLowerCase().trim();
 
-  // --- autonomy + movement toggles (these change how the pal behaves) ---
-  if (/^(do your thing|go work|auto on|be free|go play|work)$/.test(m)) {
-    state.autonomous = true; state.mode = 'idle'; bot.chat('cool, doing my own thing'); return;
+  // --- INTERRUPT commands: always run instantly, even mid-task (they cancel the current job) ---
+  // interrupt() cancels any running task + stops movement so the command takes over immediately.
+  const interrupt = () => { state.cancel = true; bot.pathfinder.setGoal(null); if (bot.pvp) bot.pvp.stop(); };
+
+  if (/^(do your thing|go work|auto on|be free|go play|go|work)$/.test(m)) {
+    interrupt(); state.autonomous = true; state.mode = 'idle'; bot.chat('cool, doing my own thing'); return;
   }
   if (/^(auto off|manual|wait for me|stop working)$/.test(m)) {
-    state.autonomous = false; bot.chat('ok, ill wait for orders'); return;
+    interrupt(); state.autonomous = false; skills.stop(); bot.chat('ok, ill wait for orders'); return;
   }
   if (/^(follow me|follow|come with me|tag along)$/.test(m)) {
-    state.autonomous = false; return ack(skills.followOwner());
+    interrupt(); state.autonomous = false; return ack(skills.followOwner());
   }
   if (/^(stop|stay|wait|halt|hold)$/.test(m)) {
-    state.autonomous = false; return ack(skills.stop());
+    interrupt(); state.autonomous = false; return ack(skills.stop());
+  }
+  // "come" walks to you but KEEPS autonomy on — so it works wherever you led it (e.g. to a forest)
+  if (/^(come|come here|here|to me|come back|come to me)$/.test(m)) {
+    interrupt(); return ack(skills.come());
   }
   // teleport (needs the world's cheats on + the pal /op'd)
-  if (/^(tp|teleport|come tp|warp to me)$/.test(m)) { skills.tpToOwner(); return; }
+  if (/^(tp|teleport|come tp|warp to me)$/.test(m)) { interrupt(); skills.tpToOwner(); return; }
   if (/^(tpme|tp me|bring me|warp me)$/.test(m)) { skills.tpOwnerHere(); return; }
+  if (/^(defend|protect|guard)( me)?$/.test(m)) { state.autoDefend = true; bot.chat('got your back'); return; }
+  if (/^(stand down|chill|relax|peace)$/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat('ok, standing down'); return; }
+  if (/^(set home|sethome|home set)$/.test(m)) { memory.setHome(bot.entity.position); bot.chat('home set right here'); return; }
+  if (/^(go home|gohome|head home)$/.test(m)) { interrupt(); state.autonomous = false; return ack(goHome()); }
 
-  // --- one-shot commands (don't disable autonomy; they run then it resumes) ---
-  if (state.busy && /^(come|defend|guard|get tools|tools|shelter|build house|house|go home)/.test(m)) {
-    bot.chat('busy right now, one sec');
-    return;
-  }
+  // --- HEAVY tasks + LLM brain: one at a time ---
+  if (state.busy) { bot.chat('on it already — say "stop" or "come" to interrupt'); return; }
+  state.cancel = false;
   state.busy = true;
   try {
-    if (/^(come|come here|here|to me)$/.test(m)) return ack(skills.come());
-    if (/^(defend|protect|guard)( me)?$/.test(m)) { state.autoDefend = true; bot.chat('got your back'); return; }
-    if (/^(stand down|chill|relax|peace)$/.test(m)) { state.autoDefend = false; if (bot.pvp) bot.pvp.stop(); bot.chat('ok, standing down'); return; }
     if (/^(get tools|make tools|tools)$/.test(m)) return ack(await skills.getTools());
     if (/^(shelter|build shelter|cover|hide)$/.test(m)) return ack(await skills.build('shelter'));
     if (/^(build house|build a house|house|make a house)$/.test(m)) return ack(await buildHouseAndRemember());
-    if (/^(set home|sethome|home set)$/.test(m)) { memory.setHome(bot.entity.position); bot.chat('home set right here'); return; }
-    if (/^(go home|gohome|head home)$/.test(m)) return ack(goHome());
+    if (/^(scout|find wood|find a forest|find trees|go that way|go straight|find forest)$/.test(m)) return ack(await skills.scout());
 
     // Everything else -> the LLM brain (chat + optional multi-step plan).
     // Only the OpenAI backend needs a key; the Claude backend uses the local CLI login.
@@ -203,6 +212,7 @@ async function execute(action) {
     case 'mine': return await skills.mineOre(a.ore || a.block || 'iron', a.count || 1);
     case 'hunt': return await skills.hunt();
     case 'build_house': return await buildHouseAndRemember();
+    case 'scout': case 'find_wood': return await skills.scout();
     case 'explore': case 'wander': return await skills.wander();
     case 'tp': return skills.tpToOwner();
     case 'tpme': return skills.tpOwnerHere();
