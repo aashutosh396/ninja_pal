@@ -5,8 +5,9 @@
 const fs = require('fs');
 const path = require('path');
 
-// Per-game file: memory-<game>.json (from config.game), else memory.json. So each world keeps
-// its own base/supply/notes and a new game starts clean.
+// Per-game file. If config.game is set it wins (manual). Otherwise the file is auto-keyed to the
+// world's spawn point (set via setWorld on first spawn) -> memory-w<x>_<z>.json. So each world
+// keeps its own base/supply/notes automatically and a new world starts clean.
 function gameTag() {
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config.json'), 'utf8'));
@@ -14,7 +15,16 @@ function gameTag() {
     return g ? `-${g}` : '';
   } catch (e) { return ''; }
 }
-const FILE = path.join(__dirname, '..', `memory${gameTag()}.json`);
+let FILE = path.join(__dirname, '..', `memory${gameTag()}.json`);
+
+// Auto-switch to a world-specific file (no-op if config.game is set, or already on it).
+function setWorld(id) {
+  if (gameTag()) return; // manual game name takes precedence
+  const f = path.join(__dirname, '..', `memory-w${id}.json`);
+  if (f === FILE) return;
+  FILE = f;
+  mem = load();
+}
 
 function load() {
   try {
@@ -90,4 +100,4 @@ function summary() {
   return parts.join(' | ') || 'nothing remembered yet';
 }
 
-module.exports = { add, setHome, getHome, setBase, getBase, clearBase, setSpawn, getSpawn, setSupply, getSupply, clearSupply, summary, all: () => mem };
+module.exports = { add, setHome, getHome, setBase, getBase, clearBase, setSpawn, getSpawn, setSupply, getSupply, clearSupply, setWorld, summary, all: () => mem };

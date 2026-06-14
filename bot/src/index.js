@@ -44,11 +44,20 @@ function saveDefs() {
   try { fs.writeFileSync(WORKERS_FILE, JSON.stringify(defs, null, 2)); } catch (e) { /* */ }
 }
 
+let worldSet = false;
 const manager = {
   onChat,
   onWhisper,
   persist: () => saveDefs(),
   tellAll: (cmd) => { for (const w of workers.values()) w.handle(cmd); },
+  // First worker to spawn reports the world spawn point -> auto-key memory to this world.
+  onWorldKnown: (sp) => {
+    if (worldSet || !sp) return;
+    worldSet = true;
+    const id = `${Math.round(sp.x)}_${Math.round(sp.z)}`;
+    memory.setWorld(id);
+    console.log(`[Crew] world ${id} -> memory-w${id}.json`);
+  },
 };
 
 function spawnWorker(def) {

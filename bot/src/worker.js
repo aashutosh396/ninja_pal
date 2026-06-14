@@ -57,6 +57,7 @@ function createWorker(config, def, manager) {
     bot.loadPlugin(collectBlock);
 
     bot.once('spawn', () => {
+      if (manager.onWorldKnown) manager.onWorldKnown(bot.spawnPoint); // auto-key memory to this world
       skills = makeSkills(bot, wcfg, state);
       autonomy = makeAutonomy(bot, skills, state, memory);
       skills.setMovements();
