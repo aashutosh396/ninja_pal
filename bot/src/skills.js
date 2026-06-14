@@ -392,6 +392,46 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
+  // Harvest ripe crops nearby and replant the seed. Returns null if it harvested anything.
+  const CROPS = {
+    wheat: { age: 7, seed: 'wheat_seeds' },
+    carrots: { age: 7, seed: 'carrot' },
+    potatoes: { age: 7, seed: 'potato' },
+    beetroots: { age: 3, seed: 'beetroot_seeds' },
+  };
+  async function farm() {
+    const mcData = require('minecraft-data')(bot.version);
+    const cropIds = Object.keys(CROPS)
+      .map((n) => mcData.blocksByName[n] && mcData.blocksByName[n].id)
+      .filter((x) => x != null);
+    if (!cropIds.length) return 'i dont know the crops here';
+    const positions = bot.findBlocks({ matching: cropIds, maxDistance: 32, count: 30 });
+    if (!positions.length) return 'no crops nearby';
+
+    let harvested = 0;
+    for (const pos of positions) {
+      if (state.cancel) break;
+      const block = bot.blockAt(pos);
+      if (!block) continue;
+      const crop = CROPS[block.name];
+      if (!crop) continue;
+      const props = block.getProperties ? block.getProperties() : {};
+      if (Number(props.age) < crop.age) continue; // not ripe yet
+      try {
+        await bot.pathfinder.goto(new goals.GoalGetToBlock(pos.x, pos.y, pos.z));
+        await bot.dig(block);
+        harvested++;
+        // replant onto the farmland below
+        const farmland = bot.blockAt(pos.offset(0, -1, 0));
+        const seed = bot.inventory.items().find((i) => i.name === crop.seed);
+        if (farmland && farmland.name === 'farmland' && seed) {
+          try { await bot.equip(seed, 'hand'); await bot.placeBlock(farmland, new Vec3(0, 1, 0)); } catch (e) { /* */ }
+        }
+      } catch (e) { /* next crop */ }
+    }
+    return harvested ? null : 'no ripe crops to harvest';
+  }
+
   // ---- building -------------------------------------------------------------
 
   function placeableItem(preferred) {
@@ -856,6 +896,7 @@ function makeSkills(bot, config, state) {
     wander,
     drop,
     depositToChest,
+    farm,
     tpToOwner,
     tpOwnerHere,
     HOSTILES,

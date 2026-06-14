@@ -10,6 +10,7 @@ const PRESETS = {
   digger: 'collect dirt and put it in the nearest chest',
   miner_stone: 'mine stone and put it in the nearest chest',
   hunter: 'hunt animals for food',
+  farmer: 'harvest ripe crops and replant them',
   survivor: 'survive on your own — wood, tools, food, a house',
   idle: 'wait for orders',
 };
@@ -40,6 +41,7 @@ function interpret(job) {
   const j = String(job || '').toLowerCase();
   if (!j.trim() || /\bidle|wait\b/.test(j)) return { kind: 'idle' };
   if (/\b(guard|protect|defend|follow|escort|bodyguard)\b/.test(j)) return { kind: 'guard' };
+  if (/\b(farm|farmer|crops?|harvest|replant|wheat|carrots?|potatoes?|beetroots?)\b/.test(j)) return { kind: 'farm' };
   if (/\b(hunt|hunting|kill animals|get food|find food)\b/.test(j)) return { kind: 'hunt' };
   if (/\b(survive|survival|on (your|his|its) own|thrive|fend for)\b/.test(j)) return { kind: 'survive' };
 

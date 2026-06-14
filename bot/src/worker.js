@@ -109,6 +109,11 @@ function createWorker(config, def, manager) {
         if (e) await skills.wander();
         return;
       }
+      case 'farm': {
+        const e = await skills.farm();
+        if (e) await skills.wander(); // no ripe crops here — roam to find a field
+        return;
+      }
       case 'survive':
         await autonomy.step();
         return;
@@ -225,6 +230,7 @@ function createWorker(config, def, manager) {
       case 'build': return await skills.build(a.what || 'shelter');
       case 'build_house': return await skills.buildHouse();
       case 'hunt': return await skills.hunt();
+      case 'farm': return await skills.farm();
       case 'deposit': case 'store': return await skills.depositToChest(a.item || 'all', a.count);
       case 'drop': case 'toss': return await skills.drop(a.item || 'all', a.count);
       case 'give': return await skills.giveToOwner(a.item || 'all', a.count);
