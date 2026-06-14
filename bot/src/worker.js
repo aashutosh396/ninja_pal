@@ -221,6 +221,7 @@ function createWorker(config, def, manager) {
 
   const TOOL_TARGET = 8;
   const FOOD_TARGET = 24;
+  let toolsPausedUntil = 0; // back off tool-making when it can't finish, so food still gets stocked
 
   async function idleAtBase() {
     let spot = memory.getBase() || memory.getSupply();
@@ -281,13 +282,20 @@ function createWorker(config, def, manager) {
     }
     if (!counts) { await idleAtBase(); return; }
 
-    if (counts.tools < TOOL_TARGET) {
+    if (counts.tools < TOOL_TARGET && Date.now() > toolsPausedUntil) {
       state.goal = 'forging tools for supply';
-      await skills.makeToolset();   // pulls logs/cobble from base chests first, then gathers shortfall
+      const e = await skills.makeToolset(); // material-aware; only gathers what it lacks
       await skills.stockSupply();
-      cachedSupply = null;          // force a fresh read next time
-      bot.chat(`${name}: restocked tools in supply`);
-      return;
+      cachedSupply = null;
+      if (e) {
+        // Can't finish tools (no stone / no table spot) -> back off so it doesn't loop-gather,
+        // and fall through to food so the supply still gets stocked.
+        toolsPausedUntil = Date.now() + 60000;
+        bot.chat(`${name}: ${e} — i'll do food and retry tools later`);
+      } else {
+        bot.chat(`${name}: restocked tools in supply`);
+        return;
+      }
     }
     if (counts.food < FOOD_TARGET) {
       state.goal = 'getting food for supply';

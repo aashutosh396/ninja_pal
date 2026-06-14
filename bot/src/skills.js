@@ -765,29 +765,40 @@ function makeSkills(bot, config, state) {
   // deposit chests); only gathers the shortfall itself. Tools stay on the worker.
   async function makeToolset() {
     const countName = (n) => bot.inventory.items().filter((i) => i.name === n).reduce((a, b) => a + b.count, 0);
-    // 1) pull what the miners/lumberjacks already stored
-    await withdrawFromBase((i) => i.name.endsWith('_log') || i.name.endsWith('_planks'), 4);
-    await withdrawFromBase((i) => i.name === 'cobblestone', 16);
-    // 2) gather only what's still missing
-    if (countLogs() < 2 && !bot.inventory.items().some((i) => i.name.endsWith('_planks'))) {
-      const e = await collect('wood', 3);
-      if (e) return e;
+    const planks = () => bot.inventory.items().filter((i) => i.name.endsWith('_planks')).reduce((a, b) => a + b.count, 0);
+
+    // Materials: only get/convert wood if we DON'T already have enough planks (no over-gathering).
+    if (planks() < 8) {
+      await withdrawFromBase((i) => i.name.endsWith('_log') || i.name.endsWith('_planks'), 4);
+      if (countLogs() < 2 && planks() < 4) {
+        const e = await collect('wood', 2);
+        if (e && planks() < 2) return e;
+      }
+      await craftPlanksFromLogs();
     }
-    await craftPlanksFromLogs();
-    await craft('crafting_table', 1);
-    const t = await placeCraftingTable();
+
+    // Crafting table (tools need one) — reuse a nearby one, only build if none.
+    const t = await ensureCraftingTable();
     if (t) return t;
-    await craft('stick', 2);
-    await craftPlanksFromLogs();
-    if (countName('cobblestone') < 16) await mineOre('stone', 16);
-    await craft('stick', 1);
+
+    if (countName('stick') < 4) await craft('stick', 2);
+
+    // Cobblestone: only mine if short.
+    if (countName('cobblestone') < 12) {
+      await withdrawFromBase((i) => i.name === 'cobblestone', 16);
+      if (countName('cobblestone') < 6) {
+        const e = await mineOre('stone', 12);
+        if (e && countName('cobblestone') < 3) return e;
+      }
+    }
+
     const made = [];
     for (const tool of ['stone_pickaxe', 'stone_axe', 'stone_sword', 'stone_shovel', 'stone_hoe']) {
       if (state.cancel) break;
       const e = await craft(tool, 1);
       if (!e) made.push(tool.replace('stone_', ''));
     }
-    return made.length ? null : 'need wood + stone to make tools';
+    return made.length ? null : 'couldnt craft tools (need stone + a crafting table)';
   }
 
   // --- default bootstrap: make sure a worker HAS the tool its job needs ----------------------
@@ -807,8 +818,7 @@ function makeSkills(bot, config, state) {
       if (e) return `no ${kind}, and no wood to make one`;
     }
     await craftPlanksFromLogs();
-    await craft('crafting_table', 1);
-    await placeCraftingTable();
+    await ensureCraftingTable();
     await craft('stick', 1);
     await craft(`wooden_${kind}`, 1);
     return hasTool(kind) ? null : `couldn't make a ${kind}`;
@@ -885,8 +895,7 @@ function makeSkills(bot, config, state) {
         if (e) return e;
       }
       await craftPlanksFromLogs();
-      await craft('crafting_table', 1);
-      await placeCraftingTable();
+      await ensureCraftingTable();
       await craft('chest', 2 - countName('chest'));
     }
     if (countName('chest') < 1) return 'need wood to build the supply chest';
@@ -1072,6 +1081,19 @@ function makeSkills(bot, config, state) {
     }
   }
 
+  // Use a crafting table within reach if one exists; only craft + place a NEW one if there's
+  // none nearby (stops the "too many crafting tables" spam — reuses the base table).
+  async function ensureCraftingTable() {
+    const mcData = require('minecraft-data')(bot.version);
+    const tableId = mcData.blocksByName.crafting_table.id;
+    if (bot.findBlock({ matching: tableId, maxDistance: 32 })) return null; // reuse existing
+    if (!bot.inventory.items().some((i) => i.name === 'crafting_table')) {
+      const e = await craft('crafting_table', 1);
+      if (e) return e;
+    }
+    return placeCraftingTable();
+  }
+
   async function placeCraftingTable() {
     const item = bot.inventory.items().find((i) => i.name === 'crafting_table');
     if (!item) return "couldn't make a crafting table";
@@ -1101,8 +1123,7 @@ function makeSkills(bot, config, state) {
     if (state.cancel) return null;
     say('crafting planks + a table');
     await craftPlanksFromLogs();
-    await craft('crafting_table', 1);
-    const tableErr = await placeCraftingTable();
+    const tableErr = await ensureCraftingTable();
     if (tableErr) return tableErr;
     await craft('stick', 1);
     await craftPlanksFromLogs(); // top up planks for the tools
