@@ -92,9 +92,11 @@ bot.once('spawn', () => {
           autoLastGoal = what;
           if (what) console.log('[Ninja Pal] auto:', what); // log only when the goal changes
         }
+        // Count steps that gained nothing (incl. fruitless exploring) — bounded so it eventually asks.
         const progressed = invTotal() !== before || (!hadHome && !!memory.getHome());
         autoNoProgress = progressed ? 0 : autoNoProgress + 1;
-        if (autoNoProgress >= 5) {
+        // ~8 fruitless steps (incl. wandering to search) before giving up and asking the owner.
+        if (autoNoProgress >= 8) {
           autoNoProgress = 0;
           autoPausedUntil = Date.now() + 90000; // back off 90s
           bot.chat(`i'm stuck trying to ${autoLastGoal || 'get going'} — nothing useful around here. tp me somewhere or tell me what to do`);

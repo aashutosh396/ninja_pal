@@ -28,14 +28,22 @@ function makeAutonomy(bot, skills, state, memory) {
     });
     const home = memory.getHome();
 
-    // 1) wood
+    // 1) wood — if none nearby, travel to look for trees instead of failing in place
     if (logs < 3 && planks < 4 && !hasPick) {
-      await skills.collect('wood', 4);
+      const err = await skills.collect('wood', 4);
+      if (err) {
+        await skills.wander();
+        return 'looking for trees';
+      }
       return 'chopping wood';
     }
-    // 2) basic wooden tools
+    // 2) basic wooden tools (getTools gathers its own wood; explore if it can't find any)
     if (!hasPick) {
-      await skills.getTools();
+      const err = await skills.getTools();
+      if (err) {
+        await skills.wander();
+        return 'looking for wood for tools';
+      }
       return 'crafting tools';
     }
     // 3) stone, then stone tools
@@ -49,9 +57,13 @@ function makeAutonomy(bot, skills, state, memory) {
       await skills.craft('stone_axe', 1);
       return 'upgrading to stone tools';
     }
-    // 4) food
+    // 4) food — if no animals nearby, roam to find some
     if (bot.food < 15 && !hasFood) {
-      await skills.hunt();
+      const err = await skills.hunt();
+      if (err) {
+        await skills.wander();
+        return 'looking for animals';
+      }
       return 'hunting for food';
     }
     // 5) a house (do it before night ideally; build once, remember it as home)

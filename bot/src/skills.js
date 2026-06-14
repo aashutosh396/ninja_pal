@@ -684,12 +684,12 @@ function makeSkills(bot, config, state) {
     return null;
   }
 
-  // Wander to a random nearby spot to explore.
-  async function wander() {
+  // Wander to a random nearby spot to explore / search for resources.
+  async function wander(distance = 18) {
     const p = bot.entity.position;
     const ang = Math.random() * Math.PI * 2;
-    const dx = Math.round(Math.cos(ang) * 10);
-    const dz = Math.round(Math.sin(ang) * 10);
+    const dx = Math.round(Math.cos(ang) * distance);
+    const dz = Math.round(Math.sin(ang) * distance);
     try { await bot.pathfinder.goto(new goals.GoalNear(p.x + dx, p.y, p.z + dz, 2)); } catch (e) { /* blocked */ }
     return null;
   }
